@@ -38,6 +38,7 @@ extern {
     ) -> *const CFrame;
     fn AppLayerFrameAddEventById(flow: *const Flow, dir: i32, id: i64, event: u8);
     fn AppLayerFrameSetLengthById(flow: *const Flow, dir: i32, id: i64, len: i64);
+    #[cfg(not(test))]
     fn AppLayerFrameSetTxIdById(flow: *const Flow, dir: i32, id: i64, tx_id: u64);
     #[cfg(not(test))]
     fn AppLayerFrameGetId(frame: *const CFrame) -> i64;
@@ -59,7 +60,7 @@ impl Frame {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn new(
         flow: *const Flow, stream_slice: &StreamSlice, frame_start: &[u8], frame_len: i64,
-        frame_type: u8,
+        frame_type: u8, tx_id: Option<u64>,
     ) -> Option<Self> {
         let offset = frame_start.as_ptr() as usize - stream_slice.as_slice().as_ptr() as usize;
         SCLogDebug!("offset {} stream_slice.len() {} frame_start.len() {}", offset, stream_slice.len(), frame_start.len());
@@ -75,10 +76,16 @@ impl Frame {
         };
         let id = unsafe { AppLayerFrameGetId(frame) };
         if id > 0 {
-            Some(Self {
+            let r = Self {
                 id,
                 direction: Direction::from(stream_slice.flags()),
-            })
+            };
+            if let Some(tx_id) = tx_id {
+                unsafe {
+                    AppLayerFrameSetTxIdById(flow, r.direction(), id, tx_id);
+                };
+            }
+            Some(r)
         } else {
             None
         }
@@ -90,7 +97,7 @@ impl Frame {
     #[cfg(test)]
     pub fn new(
         _flow: *const Flow, _stream_slice: &StreamSlice, _frame_start: &[u8], _frame_len: i64,
-        _frame_type: u8,
+        _frame_type: u8, _tx_id: Option<u64>,
     ) -> Option<Self> {
         None
     }
@@ -112,12 +119,19 @@ impl Frame {
         };
     }
 
+    #[cfg(not(test))]
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn set_tx(&self, flow: *const Flow, tx_id: u64) {
         unsafe {
             AppLayerFrameSetTxIdById(flow, self.direction(), self.id, tx_id);
         };
     }
+
+    /// A variation of `set_tx` for use when running Rust unit tests as
+    /// the C functions for building a frame are not available for
+    /// linkage.
+    #[cfg(test)]
+    pub fn set_tx(&self, _flow: *const Flow, _tx_id: u64) {}
 
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn add_event(&self, flow: *const Flow, event: u8) {

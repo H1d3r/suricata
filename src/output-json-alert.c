@@ -87,6 +87,7 @@
 #define LOG_JSON_VERDICT           BIT_U16(10)
 #define LOG_JSON_WEBSOCKET_PAYLOAD        BIT_U16(11)
 #define LOG_JSON_WEBSOCKET_PAYLOAD_BASE64 BIT_U16(12)
+#define LOG_JSON_PAYLOAD_LENGTH           BIT_U16(13)
 
 #define METADATA_DEFAULTS ( LOG_JSON_FLOW |                        \
             LOG_JSON_APP_LAYER  |                                  \
@@ -273,6 +274,9 @@ static void AlertAddPayload(AlertJsonOutputCtx *json_output_ctx, JsonBuilder *js
     if (json_output_ctx->flags & LOG_JSON_PAYLOAD_BASE64) {
         jb_set_base64(js, "payload", p->payload, p->payload_len);
     }
+    if (json_output_ctx->flags & LOG_JSON_PAYLOAD_LENGTH) {
+        jb_set_uint(js, "payload_length", p->payload_len);
+    }
 
     if (json_output_ctx->flags & LOG_JSON_PAYLOAD) {
         uint8_t printable_buf[p->payload_len + 1];
@@ -381,6 +385,26 @@ static void AlertAddAppLayer(const Packet *p, JsonBuilder *jb,
                 jb_restore_mark(jb, &mark);
             }
             break;
+        case ALPROTO_DCERPC:
+            jb_get_mark(jb, &mark);
+            void *state = FlowGetAppState(p->flow);
+            if (state) {
+                void *tx = AppLayerParserGetTx(p->flow->proto, proto, state, tx_id);
+                if (tx) {
+                    jb_open_object(jb, "dcerpc");
+                    if (p->proto == IPPROTO_TCP) {
+                        if (!rs_dcerpc_log_json_record_tcp(state, tx, jb)) {
+                            jb_restore_mark(jb, &mark);
+                        }
+                    } else {
+                        if (!rs_dcerpc_log_json_record_udp(state, tx, jb)) {
+                            jb_restore_mark(jb, &mark);
+                        }
+                    }
+                    jb_close(jb);
+                }
+            }
+            break;
         default:
             break;
     }
@@ -394,8 +418,7 @@ static void AlertAddFiles(const Packet *p, JsonBuilder *jb, const uint64_t tx_id
     if (p->flow->alstate != NULL) {
         void *tx = AppLayerParserGetTx(p->flow->proto, p->flow->alproto, p->flow->alstate, tx_id);
         if (tx) {
-            AppLayerGetFileState files =
-                    AppLayerParserGetTxFiles(p->flow, p->flow->alstate, tx, direction);
+            AppLayerGetFileState files = AppLayerParserGetTxFiles(p->flow, tx, direction);
             ffc = files.fc;
         }
     }
@@ -550,6 +573,9 @@ static bool AlertJsonStreamData(const AlertJsonOutputCtx *json_output_ctx, JsonA
         if (json_output_ctx->flags & LOG_JSON_PAYLOAD_BASE64) {
             jb_set_base64(jb, "payload", cbd.payload->buffer, cbd.payload->offset);
         }
+        if (json_output_ctx->flags & LOG_JSON_PAYLOAD_LENGTH) {
+            jb_set_uint(jb, "payload_length", cbd.payload->offset);
+        }
 
         if (json_output_ctx->flags & LOG_JSON_PAYLOAD) {
             uint8_t printable_buf[cbd.payload->offset + 1];
@@ -668,7 +694,8 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
         }
 
         /* payload */
-        if (json_output_ctx->flags & (LOG_JSON_PAYLOAD | LOG_JSON_PAYLOAD_BASE64)) {
+        if (json_output_ctx->flags &
+                (LOG_JSON_PAYLOAD | LOG_JSON_PAYLOAD_BASE64 | LOG_JSON_PAYLOAD_LENGTH)) {
             int stream = (p->proto == IPPROTO_TCP) ?
                          (pa->flags & (PACKET_ALERT_FLAG_STATE_MATCH | PACKET_ALERT_FLAG_STREAM_MATCH) ?
                          1 : 0) : 0;
@@ -764,7 +791,7 @@ static int JsonAlertLogger(ThreadVars *tv, void *thread_data, const Packet *p)
 {
     JsonAlertLogThread *aft = thread_data;
 
-    if (PKT_IS_IPV4(p) || PKT_IS_IPV6(p)) {
+    if (PacketIsIPv4(p) || PacketIsIPv6(p)) {
         return AlertJson(tv, aft, p);
     } else if (p->alerts.cnt > 0) {
         return AlertJsonDecoderEvent(tv, aft, p);
@@ -860,8 +887,6 @@ static void SetFlag(const ConfNode *conf, const char *name, uint16_t flag, uint1
     }
 }
 
-#define DEFAULT_LOG_FILENAME "alert.json"
-
 static void JsonAlertLogSetupMetadata(AlertJsonOutputCtx *json_output_ctx,
         ConfNode *conf)
 {
@@ -897,6 +922,7 @@ static void JsonAlertLogSetupMetadata(AlertJsonOutputCtx *json_output_ctx,
         SetFlag(conf, "websocket-payload-printable", LOG_JSON_WEBSOCKET_PAYLOAD, &flags);
         SetFlag(conf, "websocket-payload", LOG_JSON_WEBSOCKET_PAYLOAD_BASE64, &flags);
         SetFlag(conf, "verdict", LOG_JSON_VERDICT, &flags);
+        SetFlag(conf, "payload-length", LOG_JSON_PAYLOAD_LENGTH, &flags);
 
         /* Check for obsolete flags and warn that they have no effect. */
         static const char *deprecated_flags[] = { "http", "tls", "ssh", "smtp", "dnp3", "app-layer",

@@ -81,6 +81,7 @@
 #include "output-json-frame.h"
 #include "app-layer-parser.h"
 #include "output-filestore.h"
+#include "output-json-arp.h"
 
 typedef struct RootLogger_ {
     OutputLogFunc LogFunc;
@@ -1087,6 +1088,10 @@ void OutputRegisterLoggers(void)
     OutputRegisterTxSubModule(LOGGER_JSON_TX, "eve-log", "JsonWebSocketLog", "eve-log.websocket",
             OutputJsonLogInitSub, ALPROTO_WEBSOCKET, JsonGenericDirPacketLogger, JsonLogThreadInit,
             JsonLogThreadDeinit, NULL);
+    /* Enip JSON logger. */
+    OutputRegisterTxSubModule(LOGGER_JSON_TX, "eve-log", "JsonEnipLog", "eve-log.enip",
+            OutputJsonLogInitSub, ALPROTO_ENIP, JsonGenericDirFlowLogger, JsonLogThreadInit,
+            JsonLogThreadDeinit, NULL);
     /* Template JSON logger. */
     OutputRegisterTxSubModule(LOGGER_JSON_TX, "eve-log", "JsonTemplateLog", "eve-log.template",
             OutputJsonLogInitSub, ALPROTO_TEMPLATE, JsonGenericDirPacketLogger, JsonLogThreadInit,
@@ -1107,6 +1112,8 @@ void OutputRegisterLoggers(void)
                 "eve-log.bittorrent-dht", OutputJsonLogInitSub, ALPROTO_BITTORRENT_DHT,
                 JsonGenericDirPacketLogger, JsonLogThreadInit, JsonLogThreadDeinit, NULL);
     }
+    /* ARP JSON logger */
+    JsonArpLogRegister();
 }
 
 static EveJsonSimpleAppLayerLogger simple_json_applayer_loggers[ALPROTO_MAX] = {
@@ -1119,11 +1126,11 @@ static EveJsonSimpleAppLayerLogger simple_json_applayer_loggers[ALPROTO_MAX] = {
     { ALPROTO_IMAP, NULL },   // protocol detection only
     { ALPROTO_JABBER, NULL }, // no parser, no logging
     { ALPROTO_SMB, NULL },    // special: uses state
-    { ALPROTO_DCERPC, NULL }, // TODO missing
+    { ALPROTO_DCERPC, NULL }, // special: uses state
     { ALPROTO_IRC, NULL },    // no parser, no logging
     { ALPROTO_DNS, AlertJsonDns },
     { ALPROTO_MODBUS, (EveJsonSimpleTxLogFunc)rs_modbus_to_json },
-    { ALPROTO_ENIP, NULL }, // no logging
+    { ALPROTO_ENIP, SCEnipLoggerLog },
     { ALPROTO_DNP3, AlertJsonDnp3 },
     { ALPROTO_NFS, NULL }, // special: uses state
     { ALPROTO_NTP, NULL }, // no logging
@@ -1144,6 +1151,7 @@ static EveJsonSimpleAppLayerLogger simple_json_applayer_loggers[ALPROTO_MAX] = {
     { ALPROTO_RDP, (EveJsonSimpleTxLogFunc)rs_rdp_to_json },
     { ALPROTO_HTTP2, rs_http2_log_json },
     { ALPROTO_BITTORRENT_DHT, rs_bittorrent_dht_logger_log },
+    { ALPROTO_POP3, NULL }, // protocol detection only
     { ALPROTO_HTTP, NULL }, // signature protocol, not for app-layer logging
     { ALPROTO_FAILED, NULL },
 #ifdef UNITTESTS

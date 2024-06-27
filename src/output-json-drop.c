@@ -107,45 +107,49 @@ static int DropLogJSON (JsonDropLogThread *aft, const Packet *p)
     jb_open_object(js, "drop");
 
     uint16_t proto = 0;
-    if (PKT_IS_IPV4(p)) {
-        jb_set_uint(js, "len", IPV4_GET_IPLEN(p));
-        jb_set_uint(js, "tos", IPV4_GET_IPTOS(p));
-        jb_set_uint(js, "ttl", IPV4_GET_IPTTL(p));
-        jb_set_uint(js, "ipid", IPV4_GET_IPID(p));
-        proto = IPV4_GET_IPPROTO(p);
-    } else if (PKT_IS_IPV6(p)) {
-        jb_set_uint(js, "len", IPV6_GET_PLEN(p));
-        jb_set_uint(js, "tc", IPV6_GET_CLASS(p));
-        jb_set_uint(js, "hoplimit", IPV6_GET_HLIM(p));
-        jb_set_uint(js, "flowlbl", IPV6_GET_FLOW(p));
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr *ip4h = PacketGetIPv4(p);
+        jb_set_uint(js, "len", IPV4_GET_RAW_IPLEN(ip4h));
+        jb_set_uint(js, "tos", IPV4_GET_RAW_IPTOS(ip4h));
+        jb_set_uint(js, "ttl", IPV4_GET_RAW_IPTTL(ip4h));
+        jb_set_uint(js, "ipid", IPV4_GET_RAW_IPID(ip4h));
+        proto = IPV4_GET_RAW_IPPROTO(ip4h);
+    } else if (PacketIsIPv6(p)) {
+        const IPV6Hdr *ip6h = PacketGetIPv6(p);
+        jb_set_uint(js, "len", IPV6_GET_RAW_PLEN(ip6h));
+        jb_set_uint(js, "tc", IPV6_GET_RAW_CLASS(ip6h));
+        jb_set_uint(js, "hoplimit", IPV6_GET_RAW_HLIM(ip6h));
+        jb_set_uint(js, "flowlbl", IPV6_GET_RAW_FLOW(ip6h));
         proto = IPV6_GET_L4PROTO(p);
     }
     switch (proto) {
         case IPPROTO_TCP:
-            if (PKT_IS_TCP(p)) {
-                jb_set_uint(js, "tcpseq", TCP_GET_SEQ(p));
-                jb_set_uint(js, "tcpack", TCP_GET_ACK(p));
-                jb_set_uint(js, "tcpwin", TCP_GET_WINDOW(p));
-                jb_set_bool(js, "syn", TCP_ISSET_FLAG_SYN(p) ? true : false);
-                jb_set_bool(js, "ack", TCP_ISSET_FLAG_ACK(p) ? true : false);
-                jb_set_bool(js, "psh", TCP_ISSET_FLAG_PUSH(p) ? true : false);
-                jb_set_bool(js, "rst", TCP_ISSET_FLAG_RST(p) ? true : false);
-                jb_set_bool(js, "urg", TCP_ISSET_FLAG_URG(p) ? true : false);
-                jb_set_bool(js, "fin", TCP_ISSET_FLAG_FIN(p) ? true : false);
-                jb_set_uint(js, "tcpres",  TCP_GET_RAW_X2(p->tcph));
-                jb_set_uint(js, "tcpurgp", TCP_GET_URG_POINTER(p));
+            if (PacketIsTCP(p)) {
+                const TCPHdr *tcph = PacketGetTCP(p);
+                jb_set_uint(js, "tcpseq", TCP_GET_RAW_SEQ(tcph));
+                jb_set_uint(js, "tcpack", TCP_GET_RAW_ACK(tcph));
+                jb_set_uint(js, "tcpwin", TCP_GET_RAW_WINDOW(tcph));
+                jb_set_bool(js, "syn", TCP_ISSET_FLAG_RAW_SYN(tcph) ? true : false);
+                jb_set_bool(js, "ack", TCP_ISSET_FLAG_RAW_ACK(tcph) ? true : false);
+                jb_set_bool(js, "psh", TCP_ISSET_FLAG_RAW_PUSH(tcph) ? true : false);
+                jb_set_bool(js, "rst", TCP_ISSET_FLAG_RAW_RST(tcph) ? true : false);
+                jb_set_bool(js, "urg", TCP_ISSET_FLAG_RAW_URG(tcph) ? true : false);
+                jb_set_bool(js, "fin", TCP_ISSET_FLAG_RAW_FIN(tcph) ? true : false);
+                jb_set_uint(js, "tcpres", TCP_GET_RAW_X2(tcph));
+                jb_set_uint(js, "tcpurgp", TCP_GET_RAW_URG_POINTER(tcph));
             }
             break;
         case IPPROTO_UDP:
-            if (PKT_IS_UDP(p)) {
-                jb_set_uint(js, "udplen", UDP_GET_LEN(p));
+            if (PacketIsUDP(p)) {
+                const UDPHdr *udph = PacketGetUDP(p);
+                jb_set_uint(js, "udplen", UDP_GET_RAW_LEN(udph));
             }
             break;
         case IPPROTO_ICMP:
-            if (PKT_IS_ICMPV4(p)) {
+            if (PacketIsICMPv4(p)) {
                 jb_set_uint(js, "icmp_id", ICMPV4_GET_ID(p));
                 jb_set_uint(js, "icmp_seq", ICMPV4_GET_SEQ(p));
-            } else if(PKT_IS_ICMPV6(p)) {
+            } else if (PacketIsICMPv6(p)) {
                 jb_set_uint(js, "icmp_id", ICMPV6_GET_ID(p));
                 jb_set_uint(js, "icmp_seq", ICMPV6_GET_SEQ(p));
             }

@@ -30,13 +30,13 @@
 
 #include "suricata-common.h"
 
+#include "action-globals.h"
 #include "host.h"
 #include "ippair.h"
 
 #include "detect.h"
 #include "detect-engine.h"
 #include "detect-engine-address.h"
-#include "detect-engine-threshold.h"
 #include "detect-threshold.h"
 #include "detect-parse.h"
 #include "detect-engine-build.h"
@@ -47,7 +47,6 @@
 #include "util-unittest-helper.h"
 #include "util-byte.h"
 #include "util-time.h"
-#include "util-error.h"
 #include "util-debug.h"
 #include "util-fmemopen.h"
 
@@ -186,7 +185,7 @@ int SCThresholdConfInitContext(DetectEngineCtx *de_ctx)
         SCLogWarning("Error loading threshold configuration from %s", filename);
         SCThresholdConfDeInitContext(de_ctx, fd);
         /* maintain legacy behavior so no errors unless config testing */
-        if (RunmodeGetCurrent() == RUNMODE_CONF_TEST) {
+        if (SCRunmodeGet() == RUNMODE_CONF_TEST) {
             ret = -1;
         }
         return ret;
@@ -210,7 +209,6 @@ static void SCThresholdConfDeInitContext(DetectEngineCtx *de_ctx, FILE *fd)
 {
     if (fd != NULL)
         fclose(fd);
-    return;
 }
 
 /** \internal
@@ -257,7 +255,7 @@ static int SetupSuppressRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid,
         for (s = de_ctx->sig_list; s != NULL; s = s->next) {
             /* tag the rule as noalert */
             if (parsed_track == TRACK_RULE) {
-                s->flags |= SIG_FLAG_NOALERT;
+                s->action &= ~ACTION_ALERT;
                 continue;
             }
 
@@ -281,7 +279,7 @@ static int SetupSuppressRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid,
 
             /* tag the rule as noalert */
             if (parsed_track == TRACK_RULE) {
-                s->flags |= SIG_FLAG_NOALERT;
+                s->action &= ~ACTION_ALERT;
                 continue;
             }
 
@@ -307,7 +305,7 @@ static int SetupSuppressRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid,
                     id, gid);
         } else {
             if (parsed_track == TRACK_RULE) {
-                s->flags |= SIG_FLAG_NOALERT;
+                s->action &= ~ACTION_ALERT;
                 goto end;
             }
 
@@ -346,9 +344,8 @@ error:
  *  \retval -1 error
  */
 static int SetupThresholdRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid,
-        uint8_t parsed_type, uint8_t parsed_track, uint32_t parsed_count,
-        uint32_t parsed_seconds, uint32_t parsed_timeout, uint8_t parsed_new_action,
-        const char *th_ip)
+        uint8_t parsed_type, uint8_t parsed_track, uint32_t parsed_count, uint32_t parsed_seconds,
+        uint32_t parsed_timeout, uint8_t parsed_new_action)
 {
     Signature *s = NULL;
     SigMatch *sm = NULL;
@@ -896,9 +893,8 @@ static int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx
                     parsed_count, parsed_seconds, parsed_timeout, parsed_new_action,
                     th_ip);
     } else {
-        r = SetupThresholdRule(de_ctx, id, gid, parsed_type, parsed_track,
-                    parsed_count, parsed_seconds, parsed_timeout, parsed_new_action,
-                    th_ip);
+        r = SetupThresholdRule(de_ctx, id, gid, parsed_type, parsed_track, parsed_count,
+                parsed_seconds, parsed_timeout, parsed_new_action);
     }
     if (r < 0) {
         goto error;
@@ -996,7 +992,7 @@ int SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fp)
         esc_pos = SCThresholdConfLineIsMultiline(line);
         if (esc_pos == 0) {
             if (SCThresholdConfAddThresholdtype(line, de_ctx) < 0) {
-                if (RunmodeGetCurrent() == RUNMODE_CONF_TEST)
+                if (SCRunmodeGet() == RUNMODE_CONF_TEST)
                     return -1;
             } else {
                 SCLogDebug("Adding threshold.config rule num %" PRIu32 "( %s )", rule_num, line);

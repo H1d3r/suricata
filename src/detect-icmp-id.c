@@ -75,12 +75,9 @@ void DetectIcmpIdRegister (void)
 
 static inline bool GetIcmpId(Packet *p, uint16_t *id)
 {
-    if (PKT_IS_PSEUDOPKT(p))
-        return false;
-
     uint16_t pid;
-    if (PKT_IS_ICMPV4(p)) {
-        switch (ICMPV4_GET_TYPE(p)){
+    if (PacketIsICMPv4(p)) {
+        switch (p->icmp_s.type) {
             case ICMP_ECHOREPLY:
             case ICMP_ECHO:
             case ICMP_TIMESTAMP:
@@ -99,8 +96,8 @@ static inline bool GetIcmpId(Packet *p, uint16_t *id)
                 SCLogDebug("Packet has no id field");
                 return false;
         }
-    } else if (PKT_IS_ICMPV6(p)) {
-        switch (ICMPV6_GET_TYPE(p)) {
+    } else if (PacketIsICMPv6(p)) {
+        switch (ICMPV6_GET_TYPE(PacketGetICMPv6(p))) {
             case ICMP6_ECHO_REQUEST:
             case ICMP6_ECHO_REPLY:
                 SCLogDebug("ICMPV6_GET_ID(p) %"PRIu16" (network byte order), "
@@ -307,10 +304,8 @@ PrefilterPacketIcmpIdCompare(PrefilterPacketHeaderValue v, void *smctx)
 
 static int PrefilterSetupIcmpId(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_ICMP_ID,
-        PrefilterPacketIcmpIdSet,
-        PrefilterPacketIcmpIdCompare,
-        PrefilterPacketIcmpIdMatch);
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_ICMP_ID, SIG_MASK_REQUIRE_REAL_PKT,
+            PrefilterPacketIcmpIdSet, PrefilterPacketIcmpIdCompare, PrefilterPacketIcmpIdMatch);
 }
 
 static bool PrefilterIcmpIdIsPrefilterable(const Signature *s)
@@ -407,7 +402,7 @@ static int DetectIcmpIdMatchTest01 (void)
     memset(&th_v, 0, sizeof(ThreadVars));
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_ICMP);
-    p->icmpv4vars.id = htons(21781);
+    p->l4.vars.icmpv4.id = htons(21781);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -490,7 +485,7 @@ static int DetectIcmpIdMatchTest02 (void)
 
     ip4h.s_ip_src.s_addr = p->src.addr_data32[0];
     ip4h.s_ip_dst.s_addr = p->dst.addr_data32[0];
-    p->ip4h = &ip4h;
+    UTHSetIPV4Hdr(p, &ip4h);
 
     DecodeICMPV4(&th_v, &dtv, p, raw_icmpv4, sizeof(raw_icmpv4));
 

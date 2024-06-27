@@ -164,6 +164,7 @@ outputs:
             # payload: yes             # enable dumping payload in Base64
             # payload-buffer-size: 4kb # max size of payload buffer to output in eve-log
             # payload-printable: yes   # enable dumping payload in printable (lossy) format
+            # payload-length: yes      # enable dumping payload length
             # packet: yes              # enable dumping of packet (without stream segments)
             # metadata: no             # enable inclusion of app layer metadata with alert. Default yes
             # http-body: yes           # Requires metadata; enable dumping of HTTP body in Base64
@@ -259,7 +260,7 @@ outputs:
             # session id
             #session-resumption: no
             # custom controls which TLS fields that are included in eve-log
-            #custom: [subject, issuer, session_resumed, serial, fingerprint, sni, version, not_before, not_after, certificate, chain, ja3, ja3s, ja4]
+            #custom: [subject, issuer, session_resumed, serial, fingerprint, sni, version, not_before, not_after, certificate, chain, ja3, ja3s, ja4, subjectaltname]
         - files:
             force-magic: no   # force logging magic on all logged files
             # force logging of checksums, available hash functions are md5,
@@ -287,6 +288,7 @@ outputs:
 
         #- dnp3
         - websocket
+        #- enip
         - ftp
         - rdp
         - nfs
@@ -300,6 +302,8 @@ outputs:
         - rfb
         - sip
         - quic
+        - arp:
+            enabled: no        # Many events can be logged. Disabled by default
         - dhcp:
             enabled: yes
             # When extended mode is on, all DHCP messages are logged
@@ -984,6 +988,8 @@ app-layer:
         content-inspect-min-size: 32768
         content-inspect-window: 4096
     imap:
+      enabled: detection-only
+    pop3:
       enabled: detection-only
     smb:
       enabled: yes
@@ -1788,15 +1794,6 @@ threading:
   # Generally, the per-thread stack-size should not exceed 8MB.
   #stack-size: 8mb
 
-# Luajit has a strange memory requirement, its 'states' need to be in the
-# first 2G of the process' memory.
-#
-# 'luajit.states' is used to control how many states are preallocated.
-# State use: per detect script: 1 per detect thread. Per output script: 1 per
-# script.
-luajit:
-  states: 128
-
 # Profiling settings. Only effective if Suricata has been built with
 # the --enable-profiling configure flag.
 #
@@ -1814,6 +1811,10 @@ profiling:
     enabled: yes
     filename: rule_perf.log
     append: yes
+    # Set active to yes to enable rules profiling at start
+    # if set to no (default), the rules profiling will have to be started
+    # via unix socket commands.
+    #active:no
 
     # Sort options: ticks, avgticks, checks, matches, maxticks
     # If commented out all the sort options will be used.

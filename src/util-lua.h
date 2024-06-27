@@ -24,13 +24,10 @@
 #ifndef SURICATA_UTIL_LUA_H
 #define SURICATA_UTIL_LUA_H
 
-#ifndef HAVE_LUA
+#include "lua.h"
+#include "lualib.h"
+#include "lauxlib.h"
 
-/* If we don't have Lua, create a typedef for lua_State so the
- * exported Lua functions don't fail the build. */
-typedef void lua_State;
-
-#else
 #include "threadvars.h"
 #include "detect.h"
 
@@ -102,7 +99,5 @@ void LuaPrintStack(lua_State *state);
 int LuaPushStringBuffer(lua_State *luastate, const uint8_t *input, size_t input_len);
 
 int LuaPushInteger(lua_State *luastate, lua_Integer n);
-
-#endif /* HAVE_LUA */
 
 #endif /* SURICATA_UTIL_LUA_H */

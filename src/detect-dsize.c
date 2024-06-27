@@ -92,9 +92,7 @@ static int DetectDsizeMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
     SCEnter();
     int ret = 0;
 
-    if (PKT_IS_PSEUDOPKT(p)) {
-        SCReturnInt(0);
-    }
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
 
     const DetectU16Data *dd = (const DetectU16Data *)ctx;
 
@@ -175,10 +173,6 @@ void DetectDsizeFree(DetectEngineCtx *de_ctx, void *de_ptr)
 static void
 PrefilterPacketDsizeMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
 {
-    if (PKT_IS_PSEUDOPKT(p)) {
-        SCReturn;
-    }
-
     const PrefilterPacketHeaderCtx *ctx = pectx;
     if (!PrefilterPacketHeaderExtraMatch(ctx, p))
         return;
@@ -197,8 +191,8 @@ PrefilterPacketDsizeMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void 
 
 static int PrefilterSetupDsize(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_DSIZE, PrefilterPacketU16Set,
-            PrefilterPacketU16Compare, PrefilterPacketDsizeMatch);
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_DSIZE, SIG_MASK_REQUIRE_REAL_PKT,
+            PrefilterPacketU16Set, PrefilterPacketU16Compare, PrefilterPacketDsizeMatch);
 }
 
 static bool PrefilterDsizeIsPrefilterable(const Signature *s)

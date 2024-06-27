@@ -71,8 +71,7 @@ void LogHttpLogRegister (void)
 #define LOG_HTTP_CF_REQUEST_HOST 'h'
 #define LOG_HTTP_CF_REQUEST_PROTOCOL 'H'
 #define LOG_HTTP_CF_REQUEST_METHOD 'm'
-#define LOG_HTTP_CF_REQUEST_URI 'u'
-#define LOG_HTTP_CF_REQUEST_TIME 't'
+#define LOG_HTTP_CF_REQUEST_URI      'u'
 #define LOG_HTTP_CF_REQUEST_HEADER 'i'
 #define LOG_HTTP_CF_REQUEST_COOKIE 'C'
 #define LOG_HTTP_CF_REQUEST_LEN 'b'
@@ -487,14 +486,14 @@ int LogHttpLogger(ThreadVars *tv, void *thread_data, const Packet *p, Flow *f, v
 {
     SCEnter();
 
-    if (!(PKT_IS_TCP(p))) {
+    if (!(PacketIsTCP(p))) {
         SCReturnInt(TM_ECODE_OK);
     }
 
     int r = 0;
-    if (PKT_IS_IPV4(p)) {
+    if (PacketIsIPv4(p)) {
         r = LogHttpLogIPWrapper(tv, thread_data, p, f, (HtpState *)state, (htp_tx_t *)tx, tx_id, AF_INET);
-    } else if (PKT_IS_IPV6(p)) {
+    } else if (PacketIsIPv6(p)) {
         r = LogHttpLogIPWrapper(tv, thread_data, p, f, (HtpState *)state, (htp_tx_t *)tx, tx_id, AF_INET6);
     }
 

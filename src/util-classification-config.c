@@ -76,7 +76,6 @@ void SCClassConfInit(DetectEngineCtx *de_ctx)
     }
     de_ctx->class_conf_regex_match =
             pcre2_match_data_create_from_pattern(de_ctx->class_conf_regex, NULL);
-    return;
 }
 
 void SCClassConfDeinit(DetectEngineCtx *de_ctx)
@@ -178,7 +177,7 @@ static const char *SCClassConfGetConfFilename(const DetectEngineCtx *de_ctx)
 /**
  * \brief Releases resources used by the Classification Config API.
  */
-static void SCClassConfDeInitLocalResources(DetectEngineCtx *de_ctx, FILE *fd)
+static void SCClassConfDeInitLocalResources(FILE *fd)
 {
     if (fd != NULL) {
         fclose(fd);
@@ -194,8 +193,6 @@ void SCClassConfDeInitContext(DetectEngineCtx *de_ctx)
         HashTableFree(de_ctx->class_conf_ht);
 
     de_ctx->class_conf_ht = NULL;
-
-    return;
 }
 
 /**
@@ -435,8 +432,6 @@ static void SCClassConfDeAllocClasstype(SCClassConfClasstype *ct)
 
         SCFree(ct);
     }
-
-    return;
 }
 
 /**
@@ -512,8 +507,6 @@ char SCClassConfClasstypeHashCompareFunc(void *data1, uint16_t datalen1,
 void SCClassConfClasstypeHashFree(void *ch)
 {
     SCClassConfDeAllocClasstype(ch);
-
-    return;
 }
 
 /**
@@ -549,7 +542,7 @@ bool SCClassConfLoadClassificationConfigFile(DetectEngineCtx *de_ctx, FILE *fd)
         ret = false;
     }
 
-    SCClassConfDeInitLocalResources(de_ctx, fd);
+    SCClassConfDeInitLocalResources(fd);
 
     return ret;
 }

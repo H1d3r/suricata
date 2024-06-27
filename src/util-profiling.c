@@ -893,7 +893,7 @@ static void SCProfilingUpdatePacketDetectRecords(Packet *p)
         PktProfilingDetectData *pdt = &p->profile->detect[i];
 
         if (pdt->ticks_spent > 0) {
-            if (PKT_IS_IPV4(p)) {
+            if (PacketIsIPv4(p)) {
                 SCProfilingUpdatePacketDetectRecord(i, p->proto, pdt, 4);
             } else {
                 SCProfilingUpdatePacketDetectRecord(i, p->proto, pdt, 6);
@@ -951,7 +951,7 @@ static void SCProfilingUpdatePacketAppRecords(Packet *p)
         PktProfilingAppData *pdt = &p->profile->app[i];
 
         if (pdt->ticks_spent > 0) {
-            if (PKT_IS_IPV4(p)) {
+            if (PacketIsIPv4(p)) {
                 SCProfilingUpdatePacketAppRecord(i, p->proto, pdt, 4);
             } else {
                 SCProfilingUpdatePacketAppRecord(i, p->proto, pdt, 6);
@@ -960,7 +960,7 @@ static void SCProfilingUpdatePacketAppRecords(Packet *p)
     }
 
     if (p->profile->proto_detect > 0) {
-        if (PKT_IS_IPV4(p)) {
+        if (PacketIsIPv4(p)) {
             SCProfilingUpdatePacketAppPdRecord(p->proto, p->profile->proto_detect, 4);
         } else {
             SCProfilingUpdatePacketAppPdRecord(p->proto, p->profile->proto_detect, 6);
@@ -1011,7 +1011,7 @@ static void SCProfilingUpdatePacketTmmRecords(Packet *p)
             continue;
         }
 
-        if (PKT_IS_IPV4(p)) {
+        if (PacketIsIPv4(p)) {
             SCProfilingUpdatePacketTmmRecord(i, p->proto, pdt, 4);
         } else {
             SCProfilingUpdatePacketTmmRecord(i, p->proto, pdt, 6);
@@ -1052,7 +1052,7 @@ static void SCProfilingUpdatePacketGenericRecords(Packet *p, PktProfilingData *p
         struct ProfileProtoRecords *r = &records[i];
         SCProfilePacketData *store = NULL;
 
-        if (PKT_IS_IPV4(p)) {
+        if (PacketIsIPv4(p)) {
             store = &(r->records4[p->proto]);
         } else {
             store = &(r->records6[p->proto]);
@@ -1092,7 +1092,7 @@ static void SCProfilingUpdatePacketLogRecords(Packet *p)
         PktProfilingLoggerData *pdt = &p->profile->logger[i];
 
         if (pdt->ticks_spent > 0) {
-            if (PKT_IS_IPV4(p)) {
+            if (PacketIsIPv4(p)) {
                 SCProfilingUpdatePacketLogRecord(i, p->proto, pdt, 4);
             } else {
                 SCProfilingUpdatePacketLogRecord(i, p->proto, pdt, 6);
@@ -1111,7 +1111,7 @@ void SCProfilingAddPacket(Packet *p)
     pthread_mutex_lock(&packet_profile_lock);
     {
 
-        if (PKT_IS_IPV4(p)) {
+        if (PacketIsIPv4(p)) {
             SCProfilePacketData *pd = &packet_profile_data4[p->proto];
 
             uint64_t delta = p->profile->ticks_end - p->profile->ticks_start;
@@ -1147,7 +1147,7 @@ void SCProfilingAddPacket(Packet *p)
             SCProfilingUpdatePacketDetectRecords(p);
             SCProfilingUpdatePacketLogRecords(p);
 
-        } else if (PKT_IS_IPV6(p)) {
+        } else if (PacketIsIPv6(p)) {
             SCProfilePacketData *pd = &packet_profile_data6[p->proto];
 
             uint64_t delta = p->profile->ticks_end - p->profile->ticks_start;
@@ -1266,6 +1266,7 @@ const char *PacketProfileLoggerIdToString(LoggerId id)
         CASE_CODE(LOGGER_UNDEFINED);
         CASE_CODE(LOGGER_HTTP);
         CASE_CODE(LOGGER_TLS_STORE);
+        CASE_CODE(LOGGER_TLS_STORE_CLIENT);
         CASE_CODE(LOGGER_TLS);
         CASE_CODE(LOGGER_JSON_TX);
         CASE_CODE(LOGGER_FILE);
@@ -1287,6 +1288,7 @@ const char *PacketProfileLoggerIdToString(LoggerId id)
         CASE_CODE(LOGGER_JSON_METADATA);
         CASE_CODE(LOGGER_JSON_FRAME);
         CASE_CODE(LOGGER_JSON_STREAM);
+        CASE_CODE(LOGGER_JSON_ARP);
 
         case LOGGER_SIZE:
             return "UNKNOWN";
@@ -1430,6 +1432,7 @@ void SCProfilingInit(void)
     SC_ATOMIC_INIT(profiling_rules_active);
     SC_ATOMIC_INIT(samples);
     intmax_t rate_v = 0;
+    ConfNode *conf;
 
     (void)ConfGetInt("profiling.sample-rate", &rate_v);
     if (rate_v > 0 && rate_v < INT_MAX) {
@@ -1445,6 +1448,11 @@ void SCProfilingInit(void)
             SCLogInfo("profiling runs for every %luth packet", rate + 1);
         else
             SCLogInfo("profiling runs for every packet");
+    }
+
+    conf = ConfGetNode("profiling.rules");
+    if (ConfNodeChildValueIsTrue(conf, "active")) {
+        SC_ATOMIC_SET(profiling_rules_active, 1);
     }
 }
 
@@ -1464,7 +1472,6 @@ int SCProfileRuleStart(Packet *p)
         p->flags |= PKT_PROFILE;
         return 1;
     }
-
     return 0;
 }
 

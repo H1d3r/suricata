@@ -73,7 +73,7 @@ static Flow *FlowGetUsedFlow(ThreadVars *tv, DecodeThreadVars *dtv, const SCTime
  */
 static inline int FlowHashRawAddressIPv6GtU32(const uint32_t *a, const uint32_t *b)
 {
-    for (int i = 0; i < 4; i++) {
+    for (uint8_t i = 0; i < 4; i++) {
         if (a[i] > b[i])
             return 1;
         if (a[i] < b[i])
@@ -116,7 +116,7 @@ typedef struct FlowHashKey6_ {
 uint32_t FlowGetIpPairProtoHash(const Packet *p)
 {
     uint32_t hash = 0;
-    if (p->ip4h != NULL) {
+    if (PacketIsIPv4(p)) {
         FlowHashKey4 fhk = {
             .pad[0] = 0,
         };
@@ -137,7 +137,7 @@ uint32_t FlowGetIpPairProtoHash(const Packet *p)
         fhk.vlan_id[2] = p->vlan_id[2] & g_vlan_mask;
 
         hash = hashword(fhk.u32, ARRAY_SIZE(fhk.u32), flow_config.hash_rand);
-    } else if (p->ip6h != NULL) {
+    } else if (PacketIsIPv6(p)) {
         FlowHashKey6 fhk = {
             .pad[0] = 0,
         };
@@ -191,8 +191,8 @@ static inline uint32_t FlowGetHash(const Packet *p)
 {
     uint32_t hash = 0;
 
-    if (p->ip4h != NULL) {
-        if (p->tcph != NULL || p->udph != NULL) {
+    if (PacketIsIPv4(p)) {
+        if (PacketIsTCP(p) || PacketIsUDP(p)) {
             FlowHashKey4 fhk = { .pad[0] = 0 };
 
             int ai = (p->src.addr_data32[0] > p->dst.addr_data32[0]);
@@ -218,17 +218,17 @@ static inline uint32_t FlowGetHash(const Packet *p)
             hash = hashword(fhk.u32, ARRAY_SIZE(fhk.u32), flow_config.hash_rand);
 
         } else if (ICMPV4_DEST_UNREACH_IS_VALID(p)) {
-            uint32_t psrc = IPV4_GET_RAW_IPSRC_U32(ICMPV4_GET_EMB_IPV4(p));
-            uint32_t pdst = IPV4_GET_RAW_IPDST_U32(ICMPV4_GET_EMB_IPV4(p));
+            uint32_t psrc = IPV4_GET_RAW_IPSRC_U32(PacketGetICMPv4EmbIPv4(p));
+            uint32_t pdst = IPV4_GET_RAW_IPDST_U32(PacketGetICMPv4EmbIPv4(p));
             FlowHashKey4 fhk = { .pad[0] = 0 };
 
             const int ai = (psrc > pdst);
             fhk.addrs[1-ai] = psrc;
             fhk.addrs[ai] = pdst;
 
-            const int pi = (p->icmpv4vars.emb_sport > p->icmpv4vars.emb_dport);
-            fhk.ports[1-pi] = p->icmpv4vars.emb_sport;
-            fhk.ports[pi] = p->icmpv4vars.emb_dport;
+            const int pi = (p->l4.vars.icmpv4.emb_sport > p->l4.vars.icmpv4.emb_dport);
+            fhk.ports[1 - pi] = p->l4.vars.icmpv4.emb_sport;
+            fhk.ports[pi] = p->l4.vars.icmpv4.emb_dport;
 
             fhk.proto = ICMPV4_GET_EMB_PROTO(p);
             fhk.recur = p->recursion_level;
@@ -257,7 +257,7 @@ static inline uint32_t FlowGetHash(const Packet *p)
 
             hash = hashword(fhk.u32, ARRAY_SIZE(fhk.u32), flow_config.hash_rand);
         }
-    } else if (p->ip6h != NULL) {
+    } else if (PacketIsIPv6(p)) {
         FlowHashKey6 fhk = { .pad[0] = 0 };
         if (FlowHashRawAddressIPv6GtU32(p->src.addr_data32, p->dst.addr_data32)) {
             fhk.src[0] = p->src.addr_data32[0];
@@ -468,9 +468,9 @@ static inline int FlowCompareICMPv4(Flow *f, const Packet *p)
         /* first check the direction of the flow, in other words, the client ->
          * server direction as it's most likely the ICMP error will be a
          * response to the clients traffic */
-        if ((f->src.addr_data32[0] == IPV4_GET_RAW_IPSRC_U32(ICMPV4_GET_EMB_IPV4(p))) &&
-                (f->dst.addr_data32[0] == IPV4_GET_RAW_IPDST_U32(ICMPV4_GET_EMB_IPV4(p))) &&
-                f->sp == p->icmpv4vars.emb_sport && f->dp == p->icmpv4vars.emb_dport &&
+        if ((f->src.addr_data32[0] == IPV4_GET_RAW_IPSRC_U32(PacketGetICMPv4EmbIPv4(p))) &&
+                (f->dst.addr_data32[0] == IPV4_GET_RAW_IPDST_U32(PacketGetICMPv4EmbIPv4(p))) &&
+                f->sp == p->l4.vars.icmpv4.emb_sport && f->dp == p->l4.vars.icmpv4.emb_dport &&
                 f->proto == ICMPV4_GET_EMB_PROTO(p) && f->recursion_level == p->recursion_level &&
                 CmpVlanIds(f->vlan_id, p->vlan_id) &&
                 (f->livedev == p->livedev || g_livedev_mask == 0)) {
@@ -478,9 +478,9 @@ static inline int FlowCompareICMPv4(Flow *f, const Packet *p)
 
         /* check the less likely case where the ICMP error was a response to
          * a packet from the server. */
-        } else if ((f->dst.addr_data32[0] == IPV4_GET_RAW_IPSRC_U32(ICMPV4_GET_EMB_IPV4(p))) &&
-                   (f->src.addr_data32[0] == IPV4_GET_RAW_IPDST_U32(ICMPV4_GET_EMB_IPV4(p))) &&
-                   f->dp == p->icmpv4vars.emb_sport && f->sp == p->icmpv4vars.emb_dport &&
+        } else if ((f->dst.addr_data32[0] == IPV4_GET_RAW_IPSRC_U32(PacketGetICMPv4EmbIPv4(p))) &&
+                   (f->src.addr_data32[0] == IPV4_GET_RAW_IPDST_U32(PacketGetICMPv4EmbIPv4(p))) &&
+                   f->dp == p->l4.vars.icmpv4.emb_sport && f->sp == p->l4.vars.icmpv4.emb_dport &&
                    f->proto == ICMPV4_GET_EMB_PROTO(p) &&
                    f->recursion_level == p->recursion_level && CmpVlanIds(f->vlan_id, p->vlan_id) &&
                    (f->livedev == p->livedev || g_livedev_mask == 0)) {
@@ -514,7 +514,8 @@ static inline int FlowCompareESP(Flow *f, const Packet *p)
 
     return CmpAddrs(f_src, p_src) && CmpAddrs(f_dst, p_dst) && f->proto == p->proto &&
            f->recursion_level == p->recursion_level && CmpVlanIds(f->vlan_id, p->vlan_id) &&
-           f->esp.spi == ESP_GET_SPI(p) && (f->livedev == p->livedev || g_livedev_mask == 0);
+           f->esp.spi == ESP_GET_SPI(PacketGetESP(p)) &&
+           (f->livedev == p->livedev || g_livedev_mask == 0);
 }
 
 void FlowSetupPacket(Packet *p)
@@ -527,11 +528,10 @@ static inline int FlowCompare(Flow *f, const Packet *p)
 {
     if (p->proto == IPPROTO_ICMP) {
         return FlowCompareICMPv4(f, p);
-    } else if (p->proto == IPPROTO_ESP) {
+    } else if (PacketIsESP(p)) {
         return FlowCompareESP(f, p);
-    } else {
-        return CmpFlowPacket(f, p);
     }
+    return CmpFlowPacket(f, p);
 }
 
 /**
@@ -542,31 +542,32 @@ static inline int FlowCompare(Flow *f, const Packet *p)
  *  - TCP flags (emergency mode only)
  *
  *  \param p packet
- *  \retval 1 true
- *  \retval 0 false
+ *  \retval true
+ *  \retval false
  */
-static inline int FlowCreateCheck(const Packet *p, const bool emerg)
+static inline bool FlowCreateCheck(const Packet *p, const bool emerg)
 {
     /* if we're in emergency mode, don't try to create a flow for a TCP
      * that is not a TCP SYN packet. */
     if (emerg) {
-        if (PKT_IS_TCP(p)) {
-            if (((p->tcph->th_flags & (TH_SYN | TH_ACK | TH_RST | TH_FIN)) == TH_SYN) ||
+        if (PacketIsTCP(p)) {
+            const TCPHdr *tcph = PacketGetTCP(p);
+            if (((tcph->th_flags & (TH_SYN | TH_ACK | TH_RST | TH_FIN)) == TH_SYN) ||
                     !stream_config.midstream) {
                 ;
             } else {
-                return 0;
+                return false;
             }
         }
     }
 
-    if (PKT_IS_ICMPV4(p)) {
-        if (ICMPV4_IS_ERROR_MSG(p)) {
-            return 0;
+    if (PacketIsICMPv4(p)) {
+        if (ICMPV4_IS_ERROR_MSG(p->icmp_s.type)) {
+            return false;
         }
     }
 
-    return 1;
+    return true;
 }
 
 static inline void FlowUpdateCounter(ThreadVars *tv, DecodeThreadVars *dtv,
@@ -683,7 +684,7 @@ static Flow *FlowGetNew(ThreadVars *tv, FlowLookupStruct *fls, Packet *p)
         return NULL;
     }
 #endif
-    if (FlowCreateCheck(p, emerg) == 0) {
+    if (!FlowCreateCheck(p, emerg)) {
         return NULL;
     }
 
@@ -914,7 +915,7 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, FlowLookupStruct *fls, Packet *p, Flow
         } else if (FlowCompare(f, p) != 0) {
             FLOWLOCK_WRLOCK(f);
             /* found a matching flow that is not timed out */
-            if (unlikely(TcpSessionPacketSsnReuse(p, f, f->protoctx) == 1)) {
+            if (unlikely(TcpSessionPacketSsnReuse(p, f, f->protoctx))) {
                 Flow *new_f = TcpReuseReplace(tv, fls, fb, f, hash, p);
                 if (prev_f == NULL) /* if we have no prev it means new_f is now our prev */
                     prev_f = new_f;

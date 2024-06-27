@@ -25,7 +25,6 @@
 #include "suricata-common.h"
 #include "output-lua.h"
 
-#ifdef HAVE_LUA
 #include "util-print.h"
 #include "util-unittest.h"
 #include "util-debug.h"
@@ -175,7 +174,7 @@ static int LuaPacketLoggerAlerts(ThreadVars *tv, void *thread_data, const Packet
     char timebuf[64];
     CreateTimeString(p->ts, timebuf, sizeof(timebuf));
 
-    if (!(PKT_IS_IPV4(p)) && !(PKT_IS_IPV6(p))) {
+    if (!(PacketIsIPv4(p)) && !(PacketIsIPv6(p))) {
         /* decoder event */
         goto not_supported;
     }
@@ -237,7 +236,7 @@ static int LuaPacketLogger(ThreadVars *tv, void *thread_data, const Packet *p)
 
     char timebuf[64];
 
-    if ((!(PKT_IS_IPV4(p))) && (!(PKT_IS_IPV6(p)))) {
+    if ((!(PacketIsIPv4(p))) && (!(PacketIsIPv6(p)))) {
         goto not_supported;
     }
 
@@ -281,7 +280,7 @@ static int LuaFileLogger(ThreadVars *tv, void *thread_data, const Packet *p, con
     SCEnter();
     LogLuaThreadCtx *td = (LogLuaThreadCtx *)thread_data;
 
-    if ((!(PKT_IS_IPV4(p))) && (!(PKT_IS_IPV6(p))))
+    if ((!(PacketIsIPv4(p))) && (!(PacketIsIPv6(p))))
         return 0;
 
     BUG_ON(ff->flags & FILE_LOGGED);
@@ -500,8 +499,10 @@ static int LuaScriptInit(const char *filename, LogLuaScriptOptions *options) {
             options->tcp_data = 1;
         else if (strcmp(k, "type") == 0 && strcmp(v, "stats") == 0)
             options->stats = 1;
-        else
-            SCLogInfo("unknown key and/or value: k='%s', v='%s'", k, v);
+        else {
+            SCLogError("unknown key and/or value: k='%s', v='%s'", k, v);
+            goto error;
+        }
     }
 
     if (((options->alproto != ALPROTO_UNKNOWN)) + options->packet + options->file > 1) {
@@ -888,11 +889,3 @@ void LuaLogRegister(void) {
     /* register as separate module */
     OutputRegisterModule(MODULE_NAME, "lua", OutputLuaLogInit);
 }
-
-#else /* HAVE_LUA */
-
-void LuaLogRegister (void) {
-    /* no-op */
-}
-
-#endif /* HAVE_LUA */

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2022 Open Information Security Foundation
+/* Copyright (C) 2007-2024 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -25,7 +25,6 @@
 #include "suricata-common.h"
 #include "conf.h"
 
-#include "threads.h"
 #include "decode.h"
 
 #include "detect.h"
@@ -33,7 +32,6 @@
 
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
-#include "detect-engine-state.h"
 #include "detect-engine-build.h"
 
 #include "detect-byte.h"
@@ -42,9 +40,6 @@
 #include "flow-var.h"
 #include "flow-util.h"
 
-#include "util-debug.h"
-#include "util-spm-bm.h"
-#include "util-print.h"
 #include "util-byte.h"
 
 #include "util-unittest.h"
@@ -59,38 +54,10 @@
 #include "detect-lua.h"
 #include "detect-lua-extensions.h"
 
-#include "queue.h"
-#include "util-cpu.h"
 #include "util-var-name.h"
 
-#ifndef HAVE_LUA
-
-static int DetectLuaSetupNoSupport (DetectEngineCtx *a, Signature *b, const char *c)
-{
-    SCLogError("no Lua support built in, needed for lua/luajit keyword");
-    return -1;
-}
-
-/**
- * \brief Registration function for keyword: lua
- */
-void DetectLuaRegister(void)
-{
-    sigmatch_table[DETECT_LUA].name = "lua";
-    sigmatch_table[DETECT_LUA].alias = "luajit";
-    sigmatch_table[DETECT_LUA].desc = "support for lua scripting";
-    sigmatch_table[DETECT_LUA].url = "/rules/rule-lua-scripting.html";
-    sigmatch_table[DETECT_LUA].Setup = DetectLuaSetupNoSupport;
-    sigmatch_table[DETECT_LUA].Free  = NULL;
-    sigmatch_table[DETECT_LUA].flags = SIGMATCH_NOT_BUILT;
-
-	SCLogDebug("registering lua rule option");
-    return;
-}
-
-#else /* HAVE_LUA */
-
 #include "util-lua.h"
+#include "util-lua-sandbox.h"
 
 static int DetectLuaMatch (DetectEngineThreadCtx *,
         Packet *, const Signature *, const SigMatchCtx *);
@@ -111,7 +78,6 @@ static int g_smtp_generic_list_id = 0;
 void DetectLuaRegister(void)
 {
     sigmatch_table[DETECT_LUA].name = "lua";
-    sigmatch_table[DETECT_LUA].alias = "luajit";
     sigmatch_table[DETECT_LUA].desc = "match via a lua script";
     sigmatch_table[DETECT_LUA].url = "/rules/rule-lua-scripting.html";
     sigmatch_table[DETECT_LUA].Match = DetectLuaMatch;
@@ -129,41 +95,39 @@ void DetectLuaRegister(void)
             DetectEngineInspectGenericList, NULL);
 
     SCLogDebug("registering lua rule option");
-    return;
 }
 
-#define DATATYPE_PACKET  BIT_U32(0)
-#define DATATYPE_PAYLOAD BIT_U32(1)
-#define DATATYPE_STREAM  BIT_U32(2)
+/* Flags for DetectLuaThreadData. */
+#define FLAG_DATATYPE_PACKET                    BIT_U32(0)
+#define FLAG_DATATYPE_PAYLOAD                   BIT_U32(1)
+#define FLAG_DATATYPE_STREAM                    BIT_U32(2)
+#define FLAG_DATATYPE_HTTP_URI                  BIT_U32(3)
+#define FLAG_DATATYPE_HTTP_URI_RAW              BIT_U32(4)
+#define FLAG_DATATYPE_HTTP_REQUEST_HEADERS      BIT_U32(5)
+#define FLAG_DATATYPE_HTTP_REQUEST_HEADERS_RAW  BIT_U32(6)
+#define FLAG_DATATYPE_HTTP_REQUEST_COOKIE       BIT_U32(7)
+#define FLAG_DATATYPE_HTTP_REQUEST_UA           BIT_U32(8)
+#define FLAG_DATATYPE_HTTP_REQUEST_LINE         BIT_U32(9)
+#define FLAG_DATATYPE_HTTP_REQUEST_BODY         BIT_U32(10)
+#define FLAG_DATATYPE_HTTP_RESPONSE_COOKIE      BIT_U32(11)
+#define FLAG_DATATYPE_HTTP_RESPONSE_BODY        BIT_U32(12)
+#define FLAG_DATATYPE_HTTP_RESPONSE_HEADERS     BIT_U32(13)
+#define FLAG_DATATYPE_HTTP_RESPONSE_HEADERS_RAW BIT_U32(14)
+#define FLAG_DATATYPE_DNS_RRNAME                BIT_U32(15)
+#define FLAG_DATATYPE_DNS_REQUEST               BIT_U32(16)
+#define FLAG_DATATYPE_DNS_RESPONSE              BIT_U32(17)
+#define FLAG_DATATYPE_TLS                       BIT_U32(18)
+#define FLAG_DATATYPE_SSH                       BIT_U32(19)
+#define FLAG_DATATYPE_SMTP                      BIT_U32(20)
+#define FLAG_DATATYPE_DNP3                      BIT_U32(21)
+#define FLAG_DATATYPE_BUFFER                    BIT_U32(22)
+#define FLAG_ERROR_LOGGED                       BIT_U32(23)
+#define FLAG_BLOCKED_FUNCTION_LOGGED            BIT_U32(24)
+#define FLAG_INSTRUCTION_LIMIT_LOGGED           BIT_U32(25)
+#define FLAG_MEMORY_LIMIT_LOGGED                BIT_U32(26)
 
-#define DATATYPE_HTTP_URI     BIT_U32(3)
-#define DATATYPE_HTTP_URI_RAW BIT_U32(4)
-
-#define DATATYPE_HTTP_REQUEST_HEADERS     BIT_U32(5)
-#define DATATYPE_HTTP_REQUEST_HEADERS_RAW BIT_U32(6)
-#define DATATYPE_HTTP_REQUEST_COOKIE      BIT_U32(7)
-#define DATATYPE_HTTP_REQUEST_UA          BIT_U32(8)
-
-#define DATATYPE_HTTP_REQUEST_LINE BIT_U32(9)
-#define DATATYPE_HTTP_REQUEST_BODY BIT_U32(10)
-
-#define DATATYPE_HTTP_RESPONSE_COOKIE BIT_U32(11)
-#define DATATYPE_HTTP_RESPONSE_BODY   BIT_U32(12)
-
-#define DATATYPE_HTTP_RESPONSE_HEADERS     BIT_U32(13)
-#define DATATYPE_HTTP_RESPONSE_HEADERS_RAW BIT_U32(14)
-
-#define DATATYPE_DNS_RRNAME   BIT_U32(15)
-#define DATATYPE_DNS_REQUEST  BIT_U32(16)
-#define DATATYPE_DNS_RESPONSE BIT_U32(17)
-
-#define DATATYPE_TLS  BIT_U32(18)
-#define DATATYPE_SSH  BIT_U32(19)
-#define DATATYPE_SMTP BIT_U32(20)
-
-#define DATATYPE_DNP3 BIT_U32(21)
-
-#define DATATYPE_BUFFER BIT_U32(22)
+#define DEFAULT_LUA_ALLOC_LIMIT       500000
+#define DEFAULT_LUA_INSTRUCTION_LIMIT 500000
 
 #if 0
 /** \brief dump stack from lua state to screen */
@@ -202,43 +166,49 @@ void LuaDumpStack(lua_State *state)
 }
 #endif
 
-int DetectLuaMatchBuffer(DetectEngineThreadCtx *det_ctx,
-        const Signature *s, const SigMatchData *smd,
-        const uint8_t *buffer, uint32_t buffer_len, uint32_t offset,
-        Flow *f)
+/**
+ * \brief Common function to run the Lua match function and process
+ *     the return value.
+ */
+static int DetectLuaRunMatch(
+        DetectEngineThreadCtx *det_ctx, const DetectLuaData *lua, DetectLuaThreadData *tlua)
 {
-    SCEnter();
-    int ret = 0;
+    /* Reset instruction count. */
+    SCLuaSbResetInstructionCounter(tlua->luastate);
 
-    if (buffer == NULL || buffer_len == 0)
+    if (lua_pcall(tlua->luastate, 1, 1, 0) != 0) {
+        const char *reason = lua_tostring(tlua->luastate, -1);
+        SCLuaSbState *context = SCLuaSbGetContext(tlua->luastate);
+        uint32_t flag = 0;
+        if (context->blocked_function_error) {
+            StatsIncr(det_ctx->tv, det_ctx->lua_blocked_function_errors);
+            flag = FLAG_BLOCKED_FUNCTION_LOGGED;
+        } else if (context->instruction_count_error) {
+            StatsIncr(det_ctx->tv, det_ctx->lua_instruction_limit_errors);
+            flag = FLAG_INSTRUCTION_LIMIT_LOGGED;
+        } else if (context->memory_limit_error) {
+            StatsIncr(det_ctx->tv, det_ctx->lua_memory_limit_errors);
+            reason = "memory limit exceeded";
+            flag = FLAG_MEMORY_LIMIT_LOGGED;
+        } else {
+            flag = FLAG_ERROR_LOGGED;
+        }
+
+        /* Log once per thread per error type, the message from Lua
+         * will include the filename. */
+        if (!(tlua->flags & flag)) {
+            SCLogWarning("Lua script failed to run successfully: %s", reason);
+            tlua->flags |= flag;
+        }
+
+        StatsIncr(det_ctx->tv, det_ctx->lua_rule_errors);
+        while (lua_gettop(tlua->luastate) > 0) {
+            lua_pop(tlua->luastate, 1);
+        }
         SCReturnInt(0);
-
-    DetectLuaData *lua = (DetectLuaData *)smd->ctx;
-    if (lua == NULL)
-        SCReturnInt(0);
-
-    DetectLuaThreadData *tlua = (DetectLuaThreadData *)DetectThreadCtxGetKeywordThreadCtx(det_ctx, lua->thread_ctx_id);
-    if (tlua == NULL)
-        SCReturnInt(0);
-
-    LuaExtensionsMatchSetup(tlua->luastate, lua, det_ctx, f, /* no packet in the ctx */ NULL, s, 0);
-
-    /* prepare data to pass to script */
-    lua_getglobal(tlua->luastate, "match");
-    lua_newtable(tlua->luastate); /* stack at -1 */
-
-    lua_pushliteral (tlua->luastate, "offset"); /* stack at -2 */
-    lua_pushnumber (tlua->luastate, (int)(offset + 1));
-    lua_settable(tlua->luastate, -3);
-
-    lua_pushstring (tlua->luastate, lua->buffername); /* stack at -2 */
-    LuaPushStringBuffer(tlua->luastate, (const uint8_t *)buffer, (size_t)buffer_len);
-    lua_settable(tlua->luastate, -3);
-
-    int retval = lua_pcall(tlua->luastate, 1, 1, 0);
-    if (retval != 0) {
-        SCLogInfo("failed to run script: %s", lua_tostring(tlua->luastate, -1));
     }
+
+    int match = 0;
 
     /* process returns from script */
     if (lua_gettop(tlua->luastate) > 0) {
@@ -249,7 +219,7 @@ int DetectLuaMatchBuffer(DetectEngineThreadCtx *det_ctx,
             lua_pop(tlua->luastate, 1);
 
             if (script_ret == 1.0)
-                ret = 1;
+                match = 1;
 
         /* script returns a table */
         } else if (lua_type(tlua->luastate, 1) == LUA_TTABLE) {
@@ -271,10 +241,10 @@ int DetectLuaMatchBuffer(DetectEngineThreadCtx *det_ctx,
                         SCLogError("Invalid value "
                                    "for \"retval\" from LUA return table: '%s'",
                                 v);
-                        ret = 0;
+                        match = 0;
                     }
                     else if (val == 1) {
-                        ret = 1;
+                        match = 1;
                     }
                 } else {
                     /* set flow var? */
@@ -284,23 +254,55 @@ int DetectLuaMatchBuffer(DetectEngineThreadCtx *det_ctx,
             /* pop the table */
             lua_pop(tlua->luastate, 1);
         }
-    } else {
-        SCLogDebug("no stack");
     }
 
-    /* clear the stack */
+    if (lua->negated) {
+        if (match == 1)
+            match = 0;
+        else
+            match = 1;
+    }
+
     while (lua_gettop(tlua->luastate) > 0) {
         lua_pop(tlua->luastate, 1);
     }
 
-    if (lua->negated) {
-        if (ret == 1)
-            ret = 0;
-        else
-            ret = 1;
-    }
+    SCReturnInt(match);
+}
 
-    SCReturnInt(ret);
+int DetectLuaMatchBuffer(DetectEngineThreadCtx *det_ctx, const Signature *s,
+        const SigMatchData *smd, const uint8_t *buffer, uint32_t buffer_len, uint32_t offset,
+        Flow *f)
+{
+    SCEnter();
+
+    if (buffer == NULL || buffer_len == 0)
+        SCReturnInt(0);
+
+    DetectLuaData *lua = (DetectLuaData *)smd->ctx;
+    if (lua == NULL)
+        SCReturnInt(0);
+
+    DetectLuaThreadData *tlua =
+            (DetectLuaThreadData *)DetectThreadCtxGetKeywordThreadCtx(det_ctx, lua->thread_ctx_id);
+    if (tlua == NULL)
+        SCReturnInt(0);
+
+    LuaExtensionsMatchSetup(tlua->luastate, lua, det_ctx, f, /* no packet in the ctx */ NULL, s, 0);
+
+    /* prepare data to pass to script */
+    lua_getglobal(tlua->luastate, "match");
+    lua_newtable(tlua->luastate); /* stack at -1 */
+
+    lua_pushliteral(tlua->luastate, "offset"); /* stack at -2 */
+    lua_pushnumber(tlua->luastate, (int)(offset + 1));
+    lua_settable(tlua->luastate, -3);
+
+    lua_pushstring(tlua->luastate, lua->buffername); /* stack at -2 */
+    LuaPushStringBuffer(tlua->luastate, (const uint8_t *)buffer, (size_t)buffer_len);
+    lua_settable(tlua->luastate, -3);
+
+    SCReturnInt(DetectLuaRunMatch(det_ctx, lua, tlua));
 }
 
 /**
@@ -319,7 +321,6 @@ static int DetectLuaMatch (DetectEngineThreadCtx *det_ctx,
         Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     SCEnter();
-    int ret = 0;
     DetectLuaData *lua = (DetectLuaData *)ctx;
     if (lua == NULL)
         SCReturnInt(0);
@@ -339,9 +340,9 @@ static int DetectLuaMatch (DetectEngineThreadCtx *det_ctx,
 
     LuaExtensionsMatchSetup(tlua->luastate, lua, det_ctx, p->flow, p, s, flags);
 
-    if ((tlua->flags & DATATYPE_PAYLOAD) && p->payload_len == 0)
+    if ((tlua->flags & FLAG_DATATYPE_PAYLOAD) && p->payload_len == 0)
         SCReturnInt(0);
-    if ((tlua->flags & DATATYPE_PACKET) && GET_PKT_LEN(p) == 0)
+    if ((tlua->flags & FLAG_DATATYPE_PACKET) && GET_PKT_LEN(p) == 0)
         SCReturnInt(0);
     if (tlua->alproto != ALPROTO_UNKNOWN) {
         if (p->flow == NULL)
@@ -355,12 +356,12 @@ static int DetectLuaMatch (DetectEngineThreadCtx *det_ctx,
     lua_getglobal(tlua->luastate, "match");
     lua_newtable(tlua->luastate); /* stack at -1 */
 
-    if ((tlua->flags & DATATYPE_PAYLOAD) && p->payload_len) {
+    if ((tlua->flags & FLAG_DATATYPE_PAYLOAD) && p->payload_len) {
         lua_pushliteral(tlua->luastate, "payload"); /* stack at -2 */
         LuaPushStringBuffer (tlua->luastate, (const uint8_t *)p->payload, (size_t)p->payload_len); /* stack at -3 */
         lua_settable(tlua->luastate, -3);
     }
-    if ((tlua->flags & DATATYPE_PACKET) && GET_PKT_LEN(p)) {
+    if ((tlua->flags & FLAG_DATATYPE_PACKET) && GET_PKT_LEN(p)) {
         lua_pushliteral(tlua->luastate, "packet"); /* stack at -2 */
         LuaPushStringBuffer (tlua->luastate, (const uint8_t *)GET_PKT_DATA(p), (size_t)GET_PKT_LEN(p)); /* stack at -3 */
         lua_settable(tlua->luastate, -3);
@@ -377,8 +378,8 @@ static int DetectLuaMatch (DetectEngineThreadCtx *det_ctx,
                 if (tx == NULL)
                     continue;
 
-                if ((tlua->flags & DATATYPE_HTTP_REQUEST_LINE) && tx->request_line != NULL &&
-                    bstr_len(tx->request_line) > 0) {
+                if ((tlua->flags & FLAG_DATATYPE_HTTP_REQUEST_LINE) && tx->request_line != NULL &&
+                        bstr_len(tx->request_line) > 0) {
                     lua_pushliteral(tlua->luastate, "http.request_line"); /* stack at -2 */
                     LuaPushStringBuffer(tlua->luastate,
                                      (const uint8_t *)bstr_ptr(tx->request_line),
@@ -389,70 +390,7 @@ static int DetectLuaMatch (DetectEngineThreadCtx *det_ctx,
         }
     }
 
-    int retval = lua_pcall(tlua->luastate, 1, 1, 0);
-    if (retval != 0) {
-        SCLogInfo("failed to run script: %s", lua_tostring(tlua->luastate, -1));
-    }
-
-    /* process returns from script */
-    if (lua_gettop(tlua->luastate) > 0) {
-
-        /* script returns a number (return 1 or return 0) */
-        if (lua_type(tlua->luastate, 1) == LUA_TNUMBER) {
-            double script_ret = lua_tonumber(tlua->luastate, 1);
-            SCLogDebug("script_ret %f", script_ret);
-            lua_pop(tlua->luastate, 1);
-
-            if (script_ret == 1.0)
-                ret = 1;
-
-        /* script returns a table */
-        } else if (lua_type(tlua->luastate, 1) == LUA_TTABLE) {
-            lua_pushnil(tlua->luastate);
-            const char *k, *v;
-            while (lua_next(tlua->luastate, -2)) {
-                v = lua_tostring(tlua->luastate, -1);
-                lua_pop(tlua->luastate, 1);
-                k = lua_tostring(tlua->luastate, -1);
-
-                if (!k || !v)
-                    continue;
-
-                SCLogDebug("k='%s', v='%s'", k, v);
-
-                if (strcmp(k, "retval") == 0) {
-                    int val;
-                    if (StringParseInt32(&val, 10, 0,
-                                         (const char *)v) < 0) {
-                        SCLogError("Invalid value "
-                                   "for \"retval\" from LUA return table: '%s'",
-                                v);
-                        ret = 0;
-                    }
-                    else if (val == 1) {
-                        ret = 1;
-                    }
-                } else {
-                    /* set flow var? */
-                }
-            }
-
-            /* pop the table */
-            lua_pop(tlua->luastate, 1);
-        }
-    }
-    while (lua_gettop(tlua->luastate) > 0) {
-        lua_pop(tlua->luastate, 1);
-    }
-
-    if (lua->negated) {
-        if (ret == 1)
-            ret = 0;
-        else
-            ret = 1;
-    }
-
-    SCReturnInt(ret);
+    SCReturnInt(DetectLuaRunMatch(det_ctx, lua, tlua));
 }
 
 static int DetectLuaAppMatchCommon (DetectEngineThreadCtx *det_ctx,
@@ -460,7 +398,6 @@ static int DetectLuaAppMatchCommon (DetectEngineThreadCtx *det_ctx,
         const Signature *s, const SigMatchCtx *ctx)
 {
     SCEnter();
-    int ret = 0;
     DetectLuaData *lua = (DetectLuaData *)ctx;
     if (lua == NULL)
         SCReturnInt(0);
@@ -487,8 +424,8 @@ static int DetectLuaAppMatchCommon (DetectEngineThreadCtx *det_ctx,
             htp_tx_t *tx = NULL;
             tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP1, htp_state, det_ctx->tx_id);
             if (tx != NULL) {
-                if ((tlua->flags & DATATYPE_HTTP_REQUEST_LINE) && tx->request_line != NULL &&
-                    bstr_len(tx->request_line) > 0) {
+                if ((tlua->flags & FLAG_DATATYPE_HTTP_REQUEST_LINE) && tx->request_line != NULL &&
+                        bstr_len(tx->request_line) > 0) {
                     lua_pushliteral(tlua->luastate, "http.request_line"); /* stack at -2 */
                     LuaPushStringBuffer(tlua->luastate,
                                      (const uint8_t *)bstr_ptr(tx->request_line),
@@ -499,70 +436,7 @@ static int DetectLuaAppMatchCommon (DetectEngineThreadCtx *det_ctx,
         }
     }
 
-    int retval = lua_pcall(tlua->luastate, 1, 1, 0);
-    if (retval != 0) {
-        SCLogInfo("failed to run script: %s", lua_tostring(tlua->luastate, -1));
-    }
-
-    /* process returns from script */
-    if (lua_gettop(tlua->luastate) > 0) {
-
-        /* script returns a number (return 1 or return 0) */
-        if (lua_type(tlua->luastate, 1) == LUA_TNUMBER) {
-            double script_ret = lua_tonumber(tlua->luastate, 1);
-            SCLogDebug("script_ret %f", script_ret);
-            lua_pop(tlua->luastate, 1);
-
-            if (script_ret == 1.0)
-                ret = 1;
-
-        /* script returns a table */
-        } else if (lua_type(tlua->luastate, 1) == LUA_TTABLE) {
-            lua_pushnil(tlua->luastate);
-            const char *k, *v;
-            while (lua_next(tlua->luastate, -2)) {
-                v = lua_tostring(tlua->luastate, -1);
-                lua_pop(tlua->luastate, 1);
-                k = lua_tostring(tlua->luastate, -1);
-
-                if (!k || !v)
-                    continue;
-
-                SCLogDebug("k='%s', v='%s'", k, v);
-
-                if (strcmp(k, "retval") == 0) {
-                    int val;
-                    if (StringParseInt32(&val, 10, 0,
-                                         (const char *)v) < 0) {
-                        SCLogError("Invalid value "
-                                   "for \"retval\" from LUA return table: '%s'",
-                                v);
-                        ret = 0;
-                    }
-                    else if (val == 1) {
-                        ret = 1;
-                    }
-                } else {
-                    /* set flow var? */
-                }
-            }
-
-            /* pop the table */
-            lua_pop(tlua->luastate, 1);
-        }
-    }
-    while (lua_gettop(tlua->luastate) > 0) {
-        lua_pop(tlua->luastate, 1);
-    }
-
-    if (lua->negated) {
-        if (ret == 1)
-            ret = 0;
-        else
-            ret = 1;
-    }
-
-    SCReturnInt(ret);
+    SCReturnInt(DetectLuaRunMatch(det_ctx, lua, tlua));
 }
 
 /**
@@ -605,13 +479,17 @@ static void *DetectLuaThreadInit(void *data)
     t->alproto = lua->alproto;
     t->flags = lua->flags;
 
-    t->luastate = LuaGetState();
+    t->luastate = SCLuaSbStateNew(lua->alloc_limit, lua->instruction_limit);
     if (t->luastate == NULL) {
         SCLogError("luastate pool depleted");
         goto error;
     }
 
-    luaL_openlibs(t->luastate);
+    if (lua->allow_restricted_functions) {
+        luaL_openlibs(t->luastate);
+    } else {
+        SCLuaSbLoadLibs(t->luastate);
+    }
 
     LuaRegisterExtensions(t->luastate);
 
@@ -651,7 +529,7 @@ static void *DetectLuaThreadInit(void *data)
 
 error:
     if (t->luastate != NULL)
-        LuaReturnState(t->luastate);
+        SCLuaSbStateClose(t->luastate);
     SCFree(t);
     return NULL;
 }
@@ -661,7 +539,7 @@ static void DetectLuaThreadFree(void *ctx)
     if (ctx != NULL) {
         DetectLuaThreadData *t = (DetectLuaThreadData *)ctx;
         if (t->luastate != NULL)
-            LuaReturnState(t->luastate);
+            SCLuaSbStateClose(t->luastate);
         SCFree(t);
     }
 }
@@ -707,10 +585,14 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
 {
     int status;
 
-    lua_State *luastate = luaL_newstate();
+    lua_State *luastate = SCLuaSbStateNew(ld->alloc_limit, ld->instruction_limit);
     if (luastate == NULL)
         return -1;
-    luaL_openlibs(luastate);
+    if (ld->allow_restricted_functions) {
+        luaL_openlibs(luastate);
+    } else {
+        SCLuaSbLoadLibs(luastate);
+    }
 
     /* hackish, needed to allow unittests to pass buffers as scripts instead of files */
 #ifdef UNITTESTS
@@ -786,7 +668,7 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
                     /* removes 'value'; keeps 'key' for next iteration */
                     lua_pop(luastate, 1);
 
-                    if (ld->flowvars == DETECT_LUAJIT_MAX_FLOWVARS) {
+                    if (ld->flowvars == DETECT_LUA_MAX_FLOWVARS) {
                         SCLogError("too many flowvars registered");
                         goto error;
                     }
@@ -808,7 +690,7 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
                     /* removes 'value'; keeps 'key' for next iteration */
                     lua_pop(luastate, 1);
 
-                    if (ld->flowints == DETECT_LUAJIT_MAX_FLOWINTS) {
+                    if (ld->flowints == DETECT_LUA_MAX_FLOWINTS) {
                         SCLogError("too many flowints registered");
                         goto error;
                     }
@@ -830,7 +712,7 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
                     /* removes 'value'; keeps 'key' for next iteration */
                     lua_pop(luastate, 1);
 
-                    if (ld->bytevars == DETECT_LUAJIT_MAX_BYTEVARS) {
+                    if (ld->bytevars == DETECT_LUA_MAX_BYTEVARS) {
                         SCLogError("too many bytevars registered");
                         goto error;
                     }
@@ -857,11 +739,11 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
 
         SCLogDebug("k='%s', v='%s'", k, v);
         if (strcmp(k, "packet") == 0 && strcmp(v, "true") == 0) {
-            ld->flags |= DATATYPE_PACKET;
+            ld->flags |= FLAG_DATATYPE_PACKET;
         } else if (strcmp(k, "payload") == 0 && strcmp(v, "true") == 0) {
-            ld->flags |= DATATYPE_PAYLOAD;
+            ld->flags |= FLAG_DATATYPE_PAYLOAD;
         } else if (strcmp(k, "buffer") == 0 && strcmp(v, "true") == 0) {
-            ld->flags |= DATATYPE_BUFFER;
+            ld->flags |= FLAG_DATATYPE_BUFFER;
 
             ld->buffername = SCStrdup("buffer");
             if (ld->buffername == NULL) {
@@ -869,7 +751,7 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
                 goto error;
             }
         } else if (strcmp(k, "stream") == 0 && strcmp(v, "true") == 0) {
-            ld->flags |= DATATYPE_STREAM;
+            ld->flags |= FLAG_DATATYPE_STREAM;
 
             ld->buffername = SCStrdup("stream");
             if (ld->buffername == NULL) {
@@ -892,40 +774,40 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
             ld->alproto = ALPROTO_HTTP1;
 
             if (strcmp(k, "http.uri") == 0)
-                ld->flags |= DATATYPE_HTTP_URI;
+                ld->flags |= FLAG_DATATYPE_HTTP_URI;
 
             else if (strcmp(k, "http.uri.raw") == 0)
-                ld->flags |= DATATYPE_HTTP_URI_RAW;
+                ld->flags |= FLAG_DATATYPE_HTTP_URI_RAW;
 
             else if (strcmp(k, "http.request_line") == 0)
-                ld->flags |= DATATYPE_HTTP_REQUEST_LINE;
+                ld->flags |= FLAG_DATATYPE_HTTP_REQUEST_LINE;
 
             else if (strcmp(k, "http.request_headers") == 0)
-                ld->flags |= DATATYPE_HTTP_REQUEST_HEADERS;
+                ld->flags |= FLAG_DATATYPE_HTTP_REQUEST_HEADERS;
 
             else if (strcmp(k, "http.request_headers.raw") == 0)
-                ld->flags |= DATATYPE_HTTP_REQUEST_HEADERS_RAW;
+                ld->flags |= FLAG_DATATYPE_HTTP_REQUEST_HEADERS_RAW;
 
             else if (strcmp(k, "http.request_cookie") == 0)
-                ld->flags |= DATATYPE_HTTP_REQUEST_COOKIE;
+                ld->flags |= FLAG_DATATYPE_HTTP_REQUEST_COOKIE;
 
             else if (strcmp(k, "http.request_user_agent") == 0)
-                ld->flags |= DATATYPE_HTTP_REQUEST_UA;
+                ld->flags |= FLAG_DATATYPE_HTTP_REQUEST_UA;
 
             else if (strcmp(k, "http.request_body") == 0)
-                ld->flags |= DATATYPE_HTTP_REQUEST_BODY;
+                ld->flags |= FLAG_DATATYPE_HTTP_REQUEST_BODY;
 
             else if (strcmp(k, "http.response_body") == 0)
-                ld->flags |= DATATYPE_HTTP_RESPONSE_BODY;
+                ld->flags |= FLAG_DATATYPE_HTTP_RESPONSE_BODY;
 
             else if (strcmp(k, "http.response_cookie") == 0)
-                ld->flags |= DATATYPE_HTTP_RESPONSE_COOKIE;
+                ld->flags |= FLAG_DATATYPE_HTTP_RESPONSE_COOKIE;
 
             else if (strcmp(k, "http.response_headers") == 0)
-                ld->flags |= DATATYPE_HTTP_RESPONSE_HEADERS;
+                ld->flags |= FLAG_DATATYPE_HTTP_RESPONSE_HEADERS;
 
             else if (strcmp(k, "http.response_headers.raw") == 0)
-                ld->flags |= DATATYPE_HTTP_RESPONSE_HEADERS_RAW;
+                ld->flags |= FLAG_DATATYPE_HTTP_RESPONSE_HEADERS_RAW;
 
             else {
                 SCLogError("unsupported http data type %s", k);
@@ -942,11 +824,11 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
             ld->alproto = ALPROTO_DNS;
 
             if (strcmp(k, "dns.rrname") == 0)
-                ld->flags |= DATATYPE_DNS_RRNAME;
+                ld->flags |= FLAG_DATATYPE_DNS_RRNAME;
             else if (strcmp(k, "dns.request") == 0)
-                ld->flags |= DATATYPE_DNS_REQUEST;
+                ld->flags |= FLAG_DATATYPE_DNS_REQUEST;
             else if (strcmp(k, "dns.response") == 0)
-                ld->flags |= DATATYPE_DNS_RESPONSE;
+                ld->flags |= FLAG_DATATYPE_DNS_RESPONSE;
 
             else {
                 SCLogError("unsupported dns data type %s", k);
@@ -961,25 +843,25 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
 
             ld->alproto = ALPROTO_TLS;
 
-            ld->flags |= DATATYPE_TLS;
+            ld->flags |= FLAG_DATATYPE_TLS;
 
         } else if (strncmp(k, "ssh", 3) == 0 && strcmp(v, "true") == 0) {
 
             ld->alproto = ALPROTO_SSH;
 
-            ld->flags |= DATATYPE_SSH;
+            ld->flags |= FLAG_DATATYPE_SSH;
 
         } else if (strncmp(k, "smtp", 4) == 0 && strcmp(v, "true") == 0) {
 
             ld->alproto = ALPROTO_SMTP;
 
-            ld->flags |= DATATYPE_SMTP;
+            ld->flags |= FLAG_DATATYPE_SMTP;
 
         } else if (strncmp(k, "dnp3", 4) == 0 && strcmp(v, "true") == 0) {
 
             ld->alproto = ALPROTO_DNP3;
 
-            ld->flags |= DATATYPE_DNP3;
+            ld->flags |= FLAG_DATATYPE_DNP3;
 
         } else {
             SCLogError("unsupported data type %s", k);
@@ -989,10 +871,10 @@ static int DetectLuaSetupPrime(DetectEngineCtx *de_ctx, DetectLuaData *ld, const
 
     /* pop the table */
     lua_pop(luastate, 1);
-    lua_close(luastate);
+    SCLuaSbStateClose(luastate);
     return 0;
 error:
-    lua_close(luastate);
+    SCLuaSbStateClose(luastate);
     return -1;
 }
 
@@ -1024,6 +906,18 @@ static int DetectLuaSetup (DetectEngineCtx *de_ctx, Signature *s, const char *st
     if (lua == NULL)
         goto error;
 
+    /* Load lua sandbox configurations */
+    intmax_t lua_alloc_limit = DEFAULT_LUA_ALLOC_LIMIT;
+    intmax_t lua_instruction_limit = DEFAULT_LUA_INSTRUCTION_LIMIT;
+    (void)ConfGetInt("security.lua.max-bytes", &lua_alloc_limit);
+    (void)ConfGetInt("security.lua.max-instructions", &lua_instruction_limit);
+    lua->alloc_limit = lua_alloc_limit;
+    lua->instruction_limit = lua_instruction_limit;
+
+    int allow_restricted_functions = 0;
+    (void)ConfGetBool("security.lua.allow-restricted-functions", &allow_restricted_functions);
+    lua->allow_restricted_functions = allow_restricted_functions;
+
     if (DetectLuaSetupPrime(de_ctx, lua, s) == -1) {
         goto error;
     }
@@ -1046,10 +940,10 @@ static int DetectLuaSetup (DetectEngineCtx *de_ctx, Signature *s, const char *st
 
     int list = -1;
     if (lua->alproto == ALPROTO_UNKNOWN) {
-        if (lua->flags & DATATYPE_STREAM)
+        if (lua->flags & FLAG_DATATYPE_STREAM)
             list = DETECT_SM_LIST_PMATCH;
         else {
-            if (lua->flags & DATATYPE_BUFFER) {
+            if (lua->flags & FLAG_DATATYPE_BUFFER) {
                 if (DetectBufferGetActiveList(de_ctx, s) != -1) {
                     list = s->init_data->list;
                 } else {
@@ -1061,33 +955,34 @@ static int DetectLuaSetup (DetectEngineCtx *de_ctx, Signature *s, const char *st
         }
 
     } else if (lua->alproto == ALPROTO_HTTP1) {
-        if (lua->flags & DATATYPE_HTTP_RESPONSE_BODY) {
+        if (lua->flags & FLAG_DATATYPE_HTTP_RESPONSE_BODY) {
             list = DetectBufferTypeGetByName("file_data");
-        } else if (lua->flags & DATATYPE_HTTP_REQUEST_BODY) {
+        } else if (lua->flags & FLAG_DATATYPE_HTTP_REQUEST_BODY) {
             list = DetectBufferTypeGetByName("http_client_body");
-        } else if (lua->flags & DATATYPE_HTTP_URI) {
+        } else if (lua->flags & FLAG_DATATYPE_HTTP_URI) {
             list = DetectBufferTypeGetByName("http_uri");
-        } else if (lua->flags & DATATYPE_HTTP_URI_RAW) {
+        } else if (lua->flags & FLAG_DATATYPE_HTTP_URI_RAW) {
             list = DetectBufferTypeGetByName("http_raw_uri");
-        } else if (lua->flags & DATATYPE_HTTP_REQUEST_COOKIE ||
-                 lua->flags & DATATYPE_HTTP_RESPONSE_COOKIE)
-        {
+        } else if (lua->flags & FLAG_DATATYPE_HTTP_REQUEST_COOKIE ||
+                   lua->flags & FLAG_DATATYPE_HTTP_RESPONSE_COOKIE) {
             list = DetectBufferTypeGetByName("http_cookie");
-        } else if (lua->flags & DATATYPE_HTTP_REQUEST_UA) {
+        } else if (lua->flags & FLAG_DATATYPE_HTTP_REQUEST_UA) {
             list = DetectBufferTypeGetByName("http_user_agent");
-        } else if (lua->flags & (DATATYPE_HTTP_REQUEST_HEADERS|DATATYPE_HTTP_RESPONSE_HEADERS)) {
+        } else if (lua->flags &
+                   (FLAG_DATATYPE_HTTP_REQUEST_HEADERS | FLAG_DATATYPE_HTTP_RESPONSE_HEADERS)) {
             list = DetectBufferTypeGetByName("http_header");
-        } else if (lua->flags & (DATATYPE_HTTP_REQUEST_HEADERS_RAW|DATATYPE_HTTP_RESPONSE_HEADERS_RAW)) {
+        } else if (lua->flags & (FLAG_DATATYPE_HTTP_REQUEST_HEADERS_RAW |
+                                        FLAG_DATATYPE_HTTP_RESPONSE_HEADERS_RAW)) {
             list = DetectBufferTypeGetByName("http_raw_header");
         } else {
             list = DetectBufferTypeGetByName("http_request_line");
         }
     } else if (lua->alproto == ALPROTO_DNS) {
-        if (lua->flags & DATATYPE_DNS_RRNAME) {
+        if (lua->flags & FLAG_DATATYPE_DNS_RRNAME) {
             list = DetectBufferTypeGetByName("dns_query");
-        } else if (lua->flags & DATATYPE_DNS_REQUEST) {
+        } else if (lua->flags & FLAG_DATATYPE_DNS_REQUEST) {
             list = DetectBufferTypeGetByName("dns_request");
-        } else if (lua->flags & DATATYPE_DNS_RESPONSE) {
+        } else if (lua->flags & FLAG_DATATYPE_DNS_RESPONSE) {
             list = DetectBufferTypeGetByName("dns_response");
         }
     } else if (lua->alproto == ALPROTO_TLS) {
@@ -2546,4 +2441,3 @@ void DetectLuaRegisterTests(void)
     UtRegisterTest("LuaMatchTest06a", LuaMatchTest06a);
 }
 #endif
-#endif /* HAVE_LUAJIT */

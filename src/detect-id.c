@@ -93,16 +93,18 @@ void DetectIdRegister (void)
 static int DetectIdMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
                           const Signature *s, const SigMatchCtx *ctx)
 {
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
     const DetectIdData *id_d = (const DetectIdData *)ctx;
 
     /**
      * To match a ipv4 packet with a "id" rule
      */
-    if (!PKT_IS_IPV4(p) || PKT_IS_PSEUDOPKT(p)) {
+    if (!PacketIsIPv4(p)) {
         return 0;
     }
 
-    if (id_d->id == IPV4_GET_IPID(p)) {
+    const IPV4Hdr *ip4h = PacketGetIPv4(p);
+    if (id_d->id == IPV4_GET_RAW_IPID(ip4h)) {
         SCLogDebug("IPV4 Proto and matched with ip_id: %u.\n",
                     id_d->id);
         return 1;
@@ -223,17 +225,19 @@ void DetectIdFree(DetectEngineCtx *de_ctx, void *ptr)
 static void
 PrefilterPacketIdMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
 {
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
+
     const PrefilterPacketHeaderCtx *ctx = pectx;
 
-    if (!PKT_IS_IPV4(p) || PKT_IS_PSEUDOPKT(p)) {
+    if (!PacketIsIPv4(p)) {
         return;
     }
 
     if (!PrefilterPacketHeaderExtraMatch(ctx, p))
         return;
 
-    if (IPV4_GET_IPID(p) == ctx->v1.u16[0])
-    {
+    const IPV4Hdr *ip4h = PacketGetIPv4(p);
+    if (ctx->v1.u16[0] == IPV4_GET_RAW_IPID(ip4h)) {
         SCLogDebug("packet matches IP id %u", ctx->v1.u16[0]);
         PrefilterAddSids(&det_ctx->pmq, ctx->sigs_array, ctx->sigs_cnt);
     }
@@ -257,10 +261,8 @@ PrefilterPacketIdCompare(PrefilterPacketHeaderValue v, void *smctx)
 
 static int PrefilterSetupId(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_ID,
-        PrefilterPacketIdSet,
-        PrefilterPacketIdCompare,
-        PrefilterPacketIdMatch);
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_ID, SIG_MASK_REQUIRE_REAL_PKT,
+            PrefilterPacketIdSet, PrefilterPacketIdCompare, PrefilterPacketIdMatch);
 }
 
 static bool PrefilterIdIsPrefilterable(const Signature *s)
@@ -356,13 +358,13 @@ static int DetectIdTestMatch01(void)
     FAIL_IF_NULL(p[2]);
 
     /* TCP IP id = 1234 */
-    p[0]->ip4h->ip_id = htons(1234);
+    p[0]->l3.hdrs.ip4h->ip_id = htons(1234);
 
     /* UDP IP id = 5678 */
-    p[1]->ip4h->ip_id = htons(5678);
+    p[1]->l3.hdrs.ip4h->ip_id = htons(5678);
 
     /* UDP IP id = 91011 */
-    p[2]->ip4h->ip_id = htons(5101);
+    p[2]->l3.hdrs.ip4h->ip_id = htons(5101);
 
     const char *sigs[3];
     sigs[0]= "alert ip any any -> any any (msg:\"Testing id 1\"; id:1234; sid:1;)";

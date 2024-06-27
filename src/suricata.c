@@ -126,7 +126,6 @@
 #include "util-hugepages.h"
 #include "util-ioctl.h"
 #include "util-landlock.h"
-#include "util-luajit.h"
 #include "util-macset.h"
 #include "util-misc.h"
 #include "util-mpm-hs.h"
@@ -170,9 +169,6 @@ SC_ATOMIC_DECLARE(unsigned int, engine_stage);
 
 /** suricata engine control flags */
 volatile uint8_t suricata_ctl_flags = 0;
-
-/** Run mode selected */
-int run_mode = RUNMODE_UNKNOWN;
 
 /** Engine mode: inline (ENGINE_MODE_IPS) or just
   * detection mode (ENGINE_MODE_IDS by default) */
@@ -256,16 +252,21 @@ void EngineModeSetIDS(void)
 #ifdef UNITTESTS
 int RunmodeIsUnittests(void)
 {
-    if (run_mode == RUNMODE_UNITTEST)
+    if (suricata.run_mode == RUNMODE_UNITTEST)
         return 1;
 
     return 0;
 }
 #endif
 
-int RunmodeGetCurrent(void)
+int SCRunmodeGet(void)
 {
-    return run_mode;
+    return suricata.run_mode;
+}
+
+void SCRunmodeSet(int run_mode)
+{
+    suricata.run_mode = run_mode;
 }
 
 /** signal handlers
@@ -392,6 +393,7 @@ void GlobalsDestroy(void)
     FeatureTrackingRelease();
     SCProtoNameRelease();
     TimeDeinit();
+    SigTableCleanup();
     TmqhCleanup();
     TmModuleRunDeInit();
     ParseSizeDeinit();
@@ -413,9 +415,7 @@ void GlobalsDestroy(void)
 #endif
 
     ConfDeInit();
-#ifdef HAVE_LUAJIT
-    LuajitFreeStatesPool();
-#endif
+
     DetectParseFreeRegexes();
 
     SCPidfileRemove(suri->pid_filename);
@@ -741,17 +741,13 @@ static void PrintBuildInfo(void)
     strlcat(features, "HAVE_NSS ", sizeof(features));
     /* HTTP2_DECOMPRESSION is not an optional feature in this major version */
     strlcat(features, "HTTP2_DECOMPRESSION ", sizeof(features));
-#ifdef HAVE_LUA
+    /* Lua is now vendored in and always available. */
     strlcat(features, "HAVE_LUA ", sizeof(features));
-#endif
 #ifdef HAVE_JA3
     strlcat(features, "HAVE_JA3 ", sizeof(features));
 #endif
 #ifdef HAVE_JA4
     strlcat(features, "HAVE_JA4 ", sizeof(features));
-#endif
-#ifdef HAVE_LUAJIT
-    strlcat(features, "HAVE_LUAJIT ", sizeof(features));
 #endif
     strlcat(features, "HAVE_LIBJANSSON ", sizeof(features));
 #ifdef PROFILING
@@ -2277,14 +2273,14 @@ void PostRunDeinit(const int runmode, struct timeval *start_time)
     if (runmode == RUNMODE_UNIX_SOCKET)
         return;
 
-    /* needed by FlowForceReassembly */
+    /* needed by FlowWorkToDoCleanup */
     PacketPoolInit();
 
     /* handle graceful shutdown of the flow engine, it's helper
      * threads and the packet threads */
     FlowDisableFlowManagerThread();
     TmThreadDisableReceiveThreads();
-    FlowForceReassembly();
+    FlowWorkToDoCleanup();
     TmThreadDisablePacketThreads();
     SCPrintElapsedTime(start_time);
     FlowDisableFlowRecyclerThread();
@@ -2385,8 +2381,6 @@ int SCFinalizeRunMode(void)
         default:
             break;
     }
-    /* Set the global run mode and offline flag. */
-    run_mode = suri->run_mode;
 
     if (!CheckValidDaemonModes(suri->daemon, suri->run_mode)) {
         return TM_ECODE_FAILED;
@@ -2637,13 +2631,6 @@ static void SetupUserMode(SCInstance *suri)
  */
 int PostConfLoadedSetup(SCInstance *suri)
 {
-    /* do this as early as possible #1577 #1955 */
-#ifdef HAVE_LUAJIT
-    if (LuajitSetupStatesPool() != 0) {
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-#endif
-
     /* load the pattern matchers */
     MpmTableSetup();
     SpmTableSetup();
@@ -2984,7 +2971,7 @@ void SuricataInit(void)
         goto out;
     }
 
-    if (run_mode == RUNMODE_DPDK)
+    if (suricata.run_mode == RUNMODE_DPDK)
         prerun_snap = SystemHugepageSnapshotCreate();
 
     SCSetStartTime(&suricata);
@@ -3066,7 +3053,7 @@ void SuricataPostInit(void)
     OnNotifyRunning();
 
     PostRunStartedDetectSetup(&suricata);
-    if (run_mode == RUNMODE_DPDK) { // only DPDK uses hpages at the moment
+    if (suricata.run_mode == RUNMODE_DPDK) { // only DPDK uses hpages at the moment
         SystemHugepageSnapshot *postrun_snap = SystemHugepageSnapshotCreate();
         SystemHugepageEvaluateHugepages(prerun_snap, postrun_snap);
         SystemHugepageSnapshotDestroy(prerun_snap);

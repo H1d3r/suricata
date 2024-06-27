@@ -58,8 +58,6 @@ void DetectTemplate2Register(void)
     sigmatch_table[DETECT_TEMPLATE2].Free = DetectTemplate2Free;
     sigmatch_table[DETECT_TEMPLATE2].SupportsPrefilter = PrefilterTemplate2IsPrefilterable;
     sigmatch_table[DETECT_TEMPLATE2].SetupPrefilter = PrefilterSetupTemplate2;
-
-    return;
 }
 
 /**
@@ -77,16 +75,16 @@ void DetectTemplate2Register(void)
 static int DetectTemplate2Match (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
-
-    if (PKT_IS_PSEUDOPKT(p))
-        return 0;
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
 
     /* TODO replace this */
     uint8_t ptemplate2;
-    if (PKT_IS_IPV4(p)) {
-        ptemplate2 = IPV4_GET_IPTTL(p);
-    } else if (PKT_IS_IPV6(p)) {
-        ptemplate2 = IPV6_GET_HLIM(p);
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr *ip4h = PacketGetIPv4(p);
+        ptemplate2 = IPV4_GET_RAW_IPTTL(ip4h);
+    } else if (PacketIsIPv6(p)) {
+        const IPV6Hdr *ip6h = PacketGetIPv6(p);
+        ptemplate2 = IPV6_GET_RAW_HLIM(ip6h);
     } else {
         SCLogDebug("Packet is of not IPv4 or IPv6");
         return 0;
@@ -137,16 +135,16 @@ void DetectTemplate2Free(DetectEngineCtx *de_ctx, void *ptr)
 static void
 PrefilterPacketTemplate2Match(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
 {
-    if (PKT_IS_PSEUDOPKT(p)) {
-        SCReturn;
-    }
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
 
     uint8_t ptemplate2;
 /* TODO update */
-    if (PKT_IS_IPV4(p)) {
-        ptemplate2 = IPV4_GET_IPTTL(p);
-    } else if (PKT_IS_IPV6(p)) {
-        ptemplate2 = IPV6_GET_HLIM(p);
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr *ip4h = PacketGetIPv4(p);
+        ptemplate2 = IPV4_GET_RAW_IPTTL(ip4h);
+    } else if (PacketIsIPv6(p)) {
+        const IPV6Hdr *ip6h = PacketGetIPv6(p);
+        ptemplate2 = IPV6_GET_RAW_HLIM(ip6h);
     } else {
         SCLogDebug("Packet is of not IPv4 or IPv6");
         return;
@@ -172,8 +170,8 @@ PrefilterPacketTemplate2Match(DetectEngineThreadCtx *det_ctx, Packet *p, const v
 
 static int PrefilterSetupTemplate2(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_TEMPLATE2, PrefilterPacketU8Set,
-            PrefilterPacketU8Compare, PrefilterPacketTemplate2Match);
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_TEMPLATE2, SIG_MASK_REQUIRE_REAL_PKT,
+            PrefilterPacketU8Set, PrefilterPacketU8Compare, PrefilterPacketTemplate2Match);
 }
 
 static bool PrefilterTemplate2IsPrefilterable(const Signature *s)

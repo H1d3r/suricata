@@ -127,10 +127,8 @@ static void PacketPoolGetReturnedPackets(PktPool *pool)
 Packet *PacketPoolGetPacket(void)
 {
     PktPool *pool = GetThreadPacketPool();
-#ifdef DEBUG_VALIDATION
-    BUG_ON(pool->initialized == 0);
-    BUG_ON(pool->destroyed == 1);
-#endif /* DEBUG_VALIDATION */
+    DEBUG_VALIDATE_BUG_ON(pool->initialized == 0);
+    DEBUG_VALIDATE_BUG_ON(pool->destroyed == 1);
     if (pool->head) {
         /* Stack is not empty. */
         Packet *p = pool->head;
@@ -438,8 +436,6 @@ void TmqhReleasePacketsToPacketPool(PacketQueue *pq)
         DEBUG_VALIDATE_BUG_ON(p->flow != NULL);
         TmqhOutputPacketpool(NULL, p);
     }
-
-    return;
 }
 
 /** number of packets to keep reserved when calculating the pending

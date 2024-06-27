@@ -140,8 +140,8 @@ void DetectRunPrefilterTx(DetectEngineThreadCtx *det_ctx,
     }
 }
 
-void Prefilter(DetectEngineThreadCtx *det_ctx, const SigGroupHead *sgh,
-        Packet *p, const uint8_t flags)
+void Prefilter(DetectEngineThreadCtx *det_ctx, const SigGroupHead *sgh, Packet *p,
+        const uint8_t flags, const SignatureMask mask)
 {
     SCEnter();
 #if 0
@@ -159,9 +159,11 @@ void Prefilter(DetectEngineThreadCtx *det_ctx, const SigGroupHead *sgh,
         /* run packet engines */
         PrefilterEngine *engine = sgh->pkt_engines;
         do {
-            PREFILTER_PROFILING_START(det_ctx);
-            engine->cb.Prefilter(det_ctx, p, engine->pectx);
-            PREFILTER_PROFILING_END(det_ctx, engine->gid);
+            if ((engine->ctx.pkt_mask & mask) == engine->ctx.pkt_mask) {
+                PREFILTER_PROFILING_START(det_ctx);
+                engine->cb.Prefilter(det_ctx, p, engine->pectx);
+                PREFILTER_PROFILING_END(det_ctx, engine->gid);
+            }
 
             if (engine->is_last)
                 break;
@@ -199,10 +201,8 @@ void Prefilter(DetectEngineThreadCtx *det_ctx, const SigGroupHead *sgh,
     SCReturn;
 }
 
-int PrefilterAppendEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
-        void (*PrefilterFunc)(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx),
-        void *pectx, void (*FreeFunc)(void *pectx),
-        const char *name)
+int PrefilterAppendEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh, PrefilterPktFn PrefilterFunc,
+        SignatureMask mask, void *pectx, void (*FreeFunc)(void *pectx), const char *name)
 {
     if (sgh == NULL || PrefilterFunc == NULL || pectx == NULL)
         return -1;
@@ -215,6 +215,7 @@ int PrefilterAppendEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
     e->Prefilter = PrefilterFunc;
     e->pectx = pectx;
     e->Free = FreeFunc;
+    e->pkt_mask = mask;
 
     if (sgh->init->pkt_engines == NULL) {
         sgh->init->pkt_engines = e;
@@ -234,9 +235,7 @@ int PrefilterAppendEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
 }
 
 int PrefilterAppendPayloadEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
-        void (*PrefilterFunc)(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx),
-        void *pectx, void (*FreeFunc)(void *pectx),
-        const char *name)
+        PrefilterPktFn PrefilterFunc, void *pectx, void (*FreeFunc)(void *pectx), const char *name)
 {
     if (sgh == NULL || PrefilterFunc == NULL || pectx == NULL)
         return -1;
@@ -449,6 +448,7 @@ void PrefilterSetupRuleGroup(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         for (el = sgh->init->pkt_engines ; el != NULL; el = el->next) {
             e->local_id = el->id;
             e->cb.Prefilter = el->Prefilter;
+            e->ctx.pkt_mask = el->pkt_mask;
             e->pectx = el->pectx;
             el->pectx = NULL; // e now owns the ctx
             e->gid = el->gid;
@@ -473,6 +473,7 @@ void PrefilterSetupRuleGroup(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         for (el = sgh->init->payload_engines ; el != NULL; el = el->next) {
             e->local_id = el->id;
             e->cb.Prefilter = el->Prefilter;
+            e->ctx.pkt_mask = el->pkt_mask;
             e->pectx = el->pectx;
             el->pectx = NULL; // e now owns the ctx
             e->gid = el->gid;
@@ -763,6 +764,59 @@ int PrefilterGenericMpmRegister(DetectEngineCtx *de_ctx, SigGroupHead *sgh, MpmC
     return r;
 }
 
+static void PrefilterMultiGenericMpmFree(void *ptr)
+{
+    // PrefilterMpmListId
+    SCFree(ptr);
+}
+
+static void PrefilterMultiMpm(DetectEngineThreadCtx *det_ctx, const void *pectx, Packet *p, Flow *f,
+        void *txv, const uint64_t idx, const AppLayerTxData *_txd, const uint8_t flags)
+{
+    SCEnter();
+
+    const PrefilterMpmListId *ctx = (const PrefilterMpmListId *)pectx;
+    const MpmCtx *mpm_ctx = ctx->mpm_ctx;
+    SCLogDebug("running on list %d", ctx->list_id);
+    uint32_t local_id = 0;
+
+    do {
+        // loop until we get a NULL
+        InspectionBuffer *buffer =
+                ctx->GetData(det_ctx, ctx->transforms, f, flags, txv, ctx->list_id, local_id);
+        if (buffer == NULL)
+            break;
+
+        if (buffer->inspect_len >= mpm_ctx->minlen) {
+            (void)mpm_table[mpm_ctx->mpm_type].Search(
+                    mpm_ctx, &det_ctx->mtc, &det_ctx->pmq, buffer->inspect, buffer->inspect_len);
+            PREFILTER_PROFILING_ADD_BYTES(det_ctx, buffer->inspect_len);
+        }
+
+        local_id++;
+    } while (1);
+}
+
+int PrefilterMultiGenericMpmRegister(DetectEngineCtx *de_ctx, SigGroupHead *sgh, MpmCtx *mpm_ctx,
+        const DetectBufferMpmRegistry *mpm_reg, int list_id)
+{
+    SCEnter();
+    PrefilterMpmListId *pectx = SCCalloc(1, sizeof(*pectx));
+    if (pectx == NULL)
+        return -1;
+    pectx->list_id = list_id;
+    pectx->GetData = mpm_reg->app_v2.GetMultiData;
+    pectx->mpm_ctx = mpm_ctx;
+    pectx->transforms = &mpm_reg->transforms;
+
+    int r = PrefilterAppendTxEngine(de_ctx, sgh, PrefilterMultiMpm, mpm_reg->app_v2.alproto,
+            mpm_reg->app_v2.tx_min_progress, pectx, PrefilterMultiGenericMpmFree, mpm_reg->pname);
+    if (r != 0) {
+        SCFree(pectx);
+    }
+    return r;
+}
+
 /* generic mpm for pkt engines */
 
 typedef struct PrefilterMpmPktCtx {
@@ -824,8 +878,8 @@ int PrefilterGenericMpmPktRegister(DetectEngineCtx *de_ctx, SigGroupHead *sgh, M
     pectx->mpm_ctx = mpm_ctx;
     pectx->transforms = &mpm_reg->transforms;
 
-    int r = PrefilterAppendEngine(de_ctx, sgh, PrefilterMpmPkt,
-        pectx, PrefilterMpmPktFree, mpm_reg->pname);
+    int r = PrefilterAppendEngine(
+            de_ctx, sgh, PrefilterMpmPkt, 0, pectx, PrefilterMpmPktFree, mpm_reg->pname);
     if (r != 0) {
         SCFree(pectx);
     }

@@ -27,11 +27,11 @@
  *
  *  Set drop (+reject) flags in both current and root packet.
  *
- *  \param action action bit flags. Must be limited to ACTION_DROP_REJECT
+ *  \param action action bit flags. Must be limited to ACTION_DROP_REJECT|ACTION_ALERT
  */
 void PacketDrop(Packet *p, const uint8_t action, enum PacketDropReason r)
 {
-    DEBUG_VALIDATE_BUG_ON((action & ~ACTION_DROP_REJECT) != 0);
+    DEBUG_VALIDATE_BUG_ON((action & ~(ACTION_DROP_REJECT | ACTION_ALERT)) != 0);
 
     if (p->drop_reason == PKT_DROP_REASON_NOT_SET)
         p->drop_reason = (uint8_t)r;
@@ -63,7 +63,6 @@ void PacketInit(Packet *p)
 {
     SCSpinInit(&p->persistent.tunnel_lock, 0);
     p->alerts.alerts = PacketAlertCreate();
-    PACKET_RESET_CHECKSUMS(p);
     p->livedev = NULL;
 }
 
@@ -113,34 +112,9 @@ void PacketReinit(Packet *p)
         PktVarFree(p->pktvar);
         p->pktvar = NULL;
     }
-    p->ethh = NULL;
-    if (p->ip4h != NULL) {
-        CLEAR_IPV4_PACKET(p);
-    }
-    if (p->ip6h != NULL) {
-        CLEAR_IPV6_PACKET(p);
-    }
-    if (p->tcph != NULL) {
-        CLEAR_TCP_PACKET(p);
-    }
-    if (p->udph != NULL) {
-        CLEAR_UDP_PACKET(p);
-    }
-    if (p->sctph != NULL) {
-        CLEAR_SCTP_PACKET(p);
-    }
-    if (p->esph != NULL) {
-        CLEAR_ESP_PACKET(p);
-    }
-    if (p->icmpv4h != NULL) {
-        CLEAR_ICMPV4_PACKET(p);
-    }
-    if (p->icmpv6h != NULL) {
-        CLEAR_ICMPV6_PACKET(p);
-    }
-    p->pppoesh = NULL;
-    p->pppoedh = NULL;
-    p->greh = NULL;
+    PacketClearL2(p);
+    PacketClearL3(p);
+    PacketClearL4(p);
     p->payload = NULL;
     p->payload_len = 0;
     p->BypassPacketsFlow = NULL;
@@ -160,7 +134,6 @@ void PacketReinit(Packet *p)
     p->tunnel_verdicted = false;
     p->root = NULL;
     p->livedev = NULL;
-    PACKET_RESET_CHECKSUMS(p);
     PACKET_PROFILING_RESET(p);
     p->tenant_id = 0;
     p->nb_decoded_layers = 0;

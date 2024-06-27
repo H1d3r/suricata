@@ -47,19 +47,12 @@
 #include "app-layer-ssl.h"
 #include "app-layer-ssh.h"
 #include "app-layer-modbus.h"
-#include "app-layer-enip.h"
 #include "app-layer-dnp3.h"
 #include "app-layer-nfs-tcp.h"
 #include "app-layer-nfs-udp.h"
-#include "app-layer-ntp.h"
 #include "app-layer-tftp.h"
 #include "app-layer-ike.h"
-#include "app-layer-krb5.h"
-#include "app-layer-sip.h"
 #include "app-layer-rfb.h"
-#include "app-layer-snmp.h"
-#include "app-layer-quic.h"
-#include "app-layer-rdp.h"
 #include "app-layer-http2.h"
 
 struct AppLayerParserThreadCtx_ {
@@ -94,7 +87,7 @@ typedef struct AppLayerParserProtoCtx_
 
     /** get FileContainer reference from the TX. MUST return a non-NULL reference if the TX
      *  has or may have files in the requested direction at some point. */
-    AppLayerGetFileState (*GetTxFiles)(void *, void *, uint8_t);
+    AppLayerGetFileState (*GetTxFiles)(void *, uint8_t);
 
     int (*StateGetProgress)(void *alstate, uint8_t direction);
     uint64_t (*StateGetTxCnt)(void *alstate);
@@ -447,8 +440,8 @@ void AppLayerParserRegisterLocalStorageFunc(uint8_t ipproto, AppProto alproto,
     SCReturn;
 }
 
-void AppLayerParserRegisterGetTxFilesFunc(uint8_t ipproto, AppProto alproto,
-        AppLayerGetFileState (*GetTxFiles)(void *, void *, uint8_t))
+void AppLayerParserRegisterGetTxFilesFunc(
+        uint8_t ipproto, AppProto alproto, AppLayerGetFileState (*GetTxFiles)(void *, uint8_t))
 {
     SCEnter();
 
@@ -874,13 +867,12 @@ AppLayerDecoderEvents *AppLayerParserGetEventsByTx(uint8_t ipproto, AppProto alp
     SCReturnPtr(ptr, "AppLayerDecoderEvents *");
 }
 
-AppLayerGetFileState AppLayerParserGetTxFiles(
-        const Flow *f, void *state, void *tx, const uint8_t direction)
+AppLayerGetFileState AppLayerParserGetTxFiles(const Flow *f, void *tx, const uint8_t direction)
 {
     SCEnter();
 
     if (alp_ctx.ctxs[f->protomap][f->alproto].GetTxFiles != NULL) {
-        return alp_ctx.ctxs[f->protomap][f->alproto].GetTxFiles(state, tx, direction);
+        return alp_ctx.ctxs[f->protomap][f->alproto].GetTxFiles(tx, direction);
     }
 
     AppLayerGetFileState files = { .fc = NULL, .cfg = NULL };
@@ -890,7 +882,7 @@ AppLayerGetFileState AppLayerParserGetTxFiles(
 static void AppLayerParserFileTxHousekeeping(
         const Flow *f, void *tx, const uint8_t pkt_dir, const bool trunc)
 {
-    AppLayerGetFileState files = AppLayerParserGetTxFiles(f, FlowGetAppState(f), tx, pkt_dir);
+    AppLayerGetFileState files = AppLayerParserGetTxFiles(f, tx, pkt_dir);
     if (files.fc) {
         FilesPrune(files.fc, files.cfg, trunc);
     }
@@ -1666,7 +1658,6 @@ static void ValidateParserProtoDump(AppProto alproto, uint8_t ipproto)
 
 #define BOTH_SET(a, b) ((a) != NULL && (b) != NULL)
 #define BOTH_SET_OR_BOTH_UNSET(a, b) (((a) == NULL && (b) == NULL) || ((a) != NULL && (b) != NULL))
-#define THREE_SET_OR_THREE_UNSET(a, b, c) (((a) == NULL && (b) == NULL && (c) == NULL) || ((a) != NULL && (b) != NULL && (c) != NULL))
 #define THREE_SET(a, b, c) ((a) != NULL && (b) != NULL && (c) != NULL)
 
 static void ValidateParserProto(AppProto alproto, uint8_t ipproto)
@@ -1737,29 +1728,28 @@ void AppLayerParserRegisterProtocolParsers(void)
     RegisterFTPParsers();
     RegisterSSHParsers();
     RegisterSMTPParsers();
-    rs_dns_udp_register_parser();
-    rs_dns_tcp_register_parser();
+    SCRegisterDnsUdpParser();
+    SCRegisterDnsTcpParser();
     rs_bittorrent_dht_udp_register_parser();
     RegisterModbusParsers();
-    RegisterENIPUDPParsers();
-    RegisterENIPTCPParsers();
+    SCEnipRegisterParsers();
     RegisterDNP3Parsers();
     RegisterNFSTCPParsers();
     RegisterNFSUDPParsers();
-    RegisterNTPParsers();
+    rs_register_ntp_parser();
     RegisterTFTPParsers();
     RegisterIKEParsers();
-    RegisterKRB5Parsers();
+    rs_register_krb5_parser();
     rs_dhcp_register_parser();
-    RegisterSNMPParsers();
-    RegisterSIPParsers();
-    RegisterQuicParsers();
+    rs_register_snmp_parser();
+    rs_sip_register_parser();
+    rs_quic_register_parser();
     rs_websocket_register_parser();
     rs_template_register_parser();
     RegisterRFBParsers();
     SCMqttRegisterParser();
     rs_pgsql_register_parser();
-    RegisterRdpParsers();
+    rs_rdp_register_parser();
     RegisterHTTP2Parsers();
     rs_telnet_register_parser();
 
@@ -1769,16 +1759,25 @@ void AppLayerParserRegisterProtocolParsers(void)
         if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_IMAP,
                                   "1|20|capability", 12, 0, STREAM_TOSERVER) < 0)
         {
-            SCLogInfo("imap proto registration failure");
-            exit(EXIT_FAILURE);
+            FatalError("imap proto registration failure");
         }
     } else {
         SCLogInfo("Protocol detection and parser disabled for %s protocol.",
                   "imap");
     }
 
+    /** POP3 */
+    AppLayerProtoDetectRegisterProtocol(ALPROTO_POP3, "pop3");
+    if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", "pop3")) {
+        if (AppLayerProtoDetectPMRegisterPatternCS(
+                    IPPROTO_TCP, ALPROTO_POP3, "+OK ", 4, 0, STREAM_TOCLIENT) < 0) {
+            FatalError("pop3 proto registration failure");
+        }
+    } else {
+        SCLogInfo("Protocol detection and parser disabled for pop3 protocol.");
+    }
+
     ValidateParsers();
-    return;
 }
 
 

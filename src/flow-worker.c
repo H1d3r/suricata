@@ -1,4 +1,4 @@
-/* Copyright (C) 2016-2020 Open Information Security Foundation
+/* Copyright (C) 2016-2024 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -120,7 +120,7 @@ static int FlowFinish(ThreadVars *tv, Flow *f, FlowWorkerThreadData *fw, void *d
 
     /* insert a pseudo packet in the toserver direction */
     if (client == STREAM_HAS_UNPROCESSED_SEGMENTS_NEED_ONLY_DETECTION) {
-        Packet *p = FlowForceReassemblyPseudoPacketGet(0, f, ssn);
+        Packet *p = FlowPseudoPacketGet(0, f, ssn);
         if (p != NULL) {
             PKT_SET_SRC(p, PKT_SRC_FFR);
             if (server == STREAM_HAS_UNPROCESSED_SEGMENTS_NONE) {
@@ -134,7 +134,7 @@ static int FlowFinish(ThreadVars *tv, Flow *f, FlowWorkerThreadData *fw, void *d
 
     /* handle toclient */
     if (server == STREAM_HAS_UNPROCESSED_SEGMENTS_NEED_ONLY_DETECTION) {
-        Packet *p = FlowForceReassemblyPseudoPacketGet(1, f, ssn);
+        Packet *p = FlowPseudoPacketGet(1, f, ssn);
         if (p != NULL) {
             PKT_SET_SRC(p, PKT_SRC_FFR);
             p->flowflags |= FLOW_PKT_LAST_PSEUDO;
@@ -151,8 +151,6 @@ static int FlowFinish(ThreadVars *tv, Flow *f, FlowWorkerThreadData *fw, void *d
     return cnt;
 }
 
-extern uint32_t flow_spare_pool_block_size;
-
 /** \param[in] max_work Max flows to process. 0 if unlimited. */
 static void CheckWorkQueue(ThreadVars *tv, FlowWorkerThreadData *fw, FlowTimeoutCounters *counters,
         FlowQueuePrivate *fq, const uint32_t max_work)
@@ -166,8 +164,7 @@ static void CheckWorkQueue(ThreadVars *tv, FlowWorkerThreadData *fw, FlowTimeout
 
         if (f->proto == IPPROTO_TCP) {
             if (!(f->flags & (FLOW_TIMEOUT_REASSEMBLY_DONE | FLOW_ACTION_DROP)) &&
-                    !FlowIsBypassed(f) && FlowForceReassemblyNeedReassembly(f) == 1 &&
-                    f->ffr != 0) {
+                    !FlowIsBypassed(f) && FlowNeedsReassembly(f) && f->ffr != 0) {
                 /* read detect thread in case we're doing a reload */
                 void *detect_thread = SC_ATOMIC_GET(fw->detect_thread);
                 int cnt = FlowFinish(tv, f, fw, detect_thread);
@@ -191,9 +188,9 @@ static void CheckWorkQueue(ThreadVars *tv, FlowWorkerThreadData *fw, FlowTimeout
         FlowClearMemory (f, f->protomap);
         FLOWLOCK_UNLOCK(f);
 
-        if (fw->fls.spare_queue.len >= (flow_spare_pool_block_size * 2)) {
+        if (fw->fls.spare_queue.len >= (FLOW_SPARE_POOL_BLOCK_SIZE * 2)) {
             FlowQueuePrivatePrependFlow(&ret_queue, f);
-            if (ret_queue.len == flow_spare_pool_block_size) {
+            if (ret_queue.len == FLOW_SPARE_POOL_BLOCK_SIZE) {
                 FlowSparePoolReturnFlows(&ret_queue);
             }
         } else {
@@ -430,7 +427,7 @@ static void FlowWorkerFlowTimeout(ThreadVars *tv, Packet *p, FlowWorkerThreadDat
     DEBUG_VALIDATE_BUG_ON(p->pkt_src != PKT_SRC_FFR);
 
     SCLogDebug("packet %"PRIu64" is TCP. Direction %s", p->pcap_cnt, PKT_IS_TOSERVER(p) ? "TOSERVER" : "TOCLIENT");
-    DEBUG_VALIDATE_BUG_ON(!(p->flow && PKT_IS_TCP(p)));
+    DEBUG_VALIDATE_BUG_ON(!(p->flow && PacketIsTCP(p)));
     DEBUG_ASSERT_FLOW_LOCKED(p->flow);
 
     /* handle TCP and app layer */
@@ -511,6 +508,7 @@ static void PacketAppUpdate2FlowFlags(Packet *p)
 {
     switch ((enum StreamUpdateDir)p->app_update_direction) {
         case UPDATE_DIR_NONE: // NONE implies pseudo packet
+            SCLogDebug("pcap_cnt %" PRIu64 ", UPDATE_DIR_NONE", p->pcap_cnt);
             break;
         case UPDATE_DIR_PACKET:
             if (PKT_IS_TOSERVER(p)) {
@@ -523,20 +521,24 @@ static void PacketAppUpdate2FlowFlags(Packet *p)
             break;
         case UPDATE_DIR_BOTH:
             if (PKT_IS_TOSERVER(p)) {
-                p->flow->flags |= FLOW_TS_APP_UPDATED;
-                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TS_APP_UPDATED set", p->pcap_cnt);
+                p->flow->flags |= FLOW_TS_APP_UPDATED | FLOW_TC_APP_UPDATE_NEXT;
+                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TS_APP_UPDATED|FLOW_TC_APP_UPDATE_NEXT set",
+                        p->pcap_cnt);
             } else {
-                p->flow->flags |= FLOW_TC_APP_UPDATED;
-                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TC_APP_UPDATED set", p->pcap_cnt);
+                p->flow->flags |= FLOW_TC_APP_UPDATED | FLOW_TS_APP_UPDATE_NEXT;
+                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TC_APP_UPDATED|FLOW_TS_APP_UPDATE_NEXT set",
+                        p->pcap_cnt);
             }
             /* fall through */
         case UPDATE_DIR_OPPOSING:
             if (PKT_IS_TOSERVER(p)) {
-                p->flow->flags |= FLOW_TC_APP_UPDATED;
-                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TC_APP_UPDATED set", p->pcap_cnt);
+                p->flow->flags |= FLOW_TC_APP_UPDATED | FLOW_TS_APP_UPDATE_NEXT;
+                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TC_APP_UPDATED|FLOW_TS_APP_UPDATE_NEXT set",
+                        p->pcap_cnt);
             } else {
-                p->flow->flags |= FLOW_TS_APP_UPDATED;
-                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TS_APP_UPDATED set", p->pcap_cnt);
+                p->flow->flags |= FLOW_TS_APP_UPDATED | FLOW_TC_APP_UPDATE_NEXT;
+                SCLogDebug("pcap_cnt %" PRIu64 ", FLOW_TS_APP_UPDATED|FLOW_TC_APP_UPDATE_NEXT set",
+                        p->pcap_cnt);
             }
             break;
     }
@@ -583,7 +585,23 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data)
 
     /* handle TCP and app layer */
     if (p->flow) {
-        if (PKT_IS_TCP(p)) {
+        SCLogDebug("packet %" PRIu64
+                   ": direction %s FLOW_TS_APP_UPDATE_NEXT %s FLOW_TC_APP_UPDATE_NEXT %s",
+                p->pcap_cnt, PKT_IS_TOSERVER(p) ? "toserver" : "toclient",
+                BOOL2STR((p->flow->flags & FLOW_TS_APP_UPDATE_NEXT) != 0),
+                BOOL2STR((p->flow->flags & FLOW_TC_APP_UPDATE_NEXT) != 0));
+        /* see if need to consider flags set by prev packets */
+        if (PKT_IS_TOSERVER(p) && (p->flow->flags & FLOW_TS_APP_UPDATE_NEXT)) {
+            p->flow->flags |= FLOW_TS_APP_UPDATED;
+            p->flow->flags &= ~FLOW_TS_APP_UPDATE_NEXT;
+            SCLogDebug("FLOW_TS_APP_UPDATED");
+        } else if (PKT_IS_TOCLIENT(p) && (p->flow->flags & FLOW_TC_APP_UPDATE_NEXT)) {
+            p->flow->flags |= FLOW_TC_APP_UPDATED;
+            p->flow->flags &= ~FLOW_TC_APP_UPDATE_NEXT;
+            SCLogDebug("FLOW_TC_APP_UPDATED");
+        }
+
+        if (PacketIsTCP(p)) {
             SCLogDebug("packet %" PRIu64 " is TCP. Direction %s", p->pcap_cnt,
                     PKT_IS_TOSERVER(p) ? "TOSERVER" : "TOCLIENT");
             DEBUG_ASSERT_FLOW_LOCKED(p->flow);
@@ -632,7 +650,11 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data)
                 StreamTcpSessionCleanup(p->flow->protoctx);
             }
         } else if (p->proto == IPPROTO_TCP && p->flow->protoctx && p->flags & PKT_STREAM_EST) {
-            FramesPrune(p->flow, p);
+            if ((p->flow->flags & FLOW_TS_APP_UPDATED) && PKT_IS_TOSERVER(p)) {
+                FramesPrune(p->flow, p);
+            } else if ((p->flow->flags & FLOW_TC_APP_UPDATED) && PKT_IS_TOCLIENT(p)) {
+                FramesPrune(p->flow, p);
+            }
             FLOWWORKER_PROFILING_START(p, PROFILE_FLOWWORKER_TCPPRUNE);
             StreamTcpPruneSession(p->flow, p->flowflags & FLOW_PKT_TOSERVER ?
                     STREAM_TOSERVER : STREAM_TOCLIENT);
@@ -648,11 +670,13 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data)
                     if (PKT_IS_PSEUDOPKT(p) || (p->flow->flags & (FLOW_TS_APP_UPDATED))) {
                         AppLayerParserTransactionsCleanup(p->flow, STREAM_TOSERVER);
                         p->flow->flags &= ~FLOW_TS_APP_UPDATED;
+                        SCLogDebug("~FLOW_TS_APP_UPDATED");
                     }
                 } else {
                     if (PKT_IS_PSEUDOPKT(p) || (p->flow->flags & (FLOW_TC_APP_UPDATED))) {
                         AppLayerParserTransactionsCleanup(p->flow, STREAM_TOCLIENT);
                         p->flow->flags &= ~FLOW_TC_APP_UPDATED;
+                        SCLogDebug("~FLOW_TC_APP_UPDATED");
                     }
                 }
             }

@@ -240,7 +240,8 @@ typedef struct DetectPort_ {
 #define SIG_FLAG_SP_ANY                 BIT_U32(2)  /**< source port is any */
 #define SIG_FLAG_DP_ANY                 BIT_U32(3)  /**< destination port is any */
 
-#define SIG_FLAG_NOALERT                BIT_U32(4)  /**< no alert flag is set */
+// vacancy
+
 #define SIG_FLAG_DSIZE                  BIT_U32(5)  /**< signature has a dsize setting */
 #define SIG_FLAG_APPLAYER               BIT_U32(6) /**< signature applies to app layer instead of packets */
 
@@ -302,14 +303,12 @@ typedef struct DetectPort_ {
 #define SIG_MASK_REQUIRE_FLAGS_INITDEINIT   BIT_U8(2)    /* SYN, FIN, RST */
 #define SIG_MASK_REQUIRE_FLAGS_UNUSUAL      BIT_U8(3)    /* URG, ECN, CWR */
 #define SIG_MASK_REQUIRE_NO_PAYLOAD         BIT_U8(4)
-// vacancy 2x
+#define SIG_MASK_REQUIRE_REAL_PKT           BIT_U8(5)
+// vacancy 1x
 #define SIG_MASK_REQUIRE_ENGINE_EVENT       BIT_U8(7)
 
 /* for now a uint8_t is enough */
 #define SignatureMask uint8_t
-
-#define DETECT_ENGINE_THREAD_CTX_FRAME_ID_SET         0x0001
-#define DETECT_ENGINE_THREAD_CTX_STREAM_CONTENT_MATCH 0x0004
 
 #define FILE_SIG_NEED_FILE          0x01
 #define FILE_SIG_NEED_FILENAME      0x02
@@ -417,6 +416,9 @@ typedef InspectionBuffer *(*InspectionBufferGetDataPtr)(
         const DetectEngineTransforms *transforms,
         Flow *f, const uint8_t flow_flags,
         void *txv, const int list_id);
+typedef InspectionBuffer *(*InspectionMultiBufferGetDataPtr)(struct DetectEngineThreadCtx_ *det_ctx,
+        const DetectEngineTransforms *transforms, Flow *f, const uint8_t flow_flags, void *txv,
+        const int list_id, const uint32_t local_id);
 struct DetectEngineAppInspectionEngine_;
 
 typedef uint8_t (*InspectEngineFuncPtr)(struct DetectEngineCtx_ *de_ctx,
@@ -435,7 +437,10 @@ typedef struct DetectEngineAppInspectionEngine_ {
     int16_t progress;
 
     struct {
-        InspectionBufferGetDataPtr GetData;
+        union {
+            InspectionBufferGetDataPtr GetData;
+            InspectionMultiBufferGetDataPtr GetMultiData;
+        };
         InspectEngineFuncPtr Callback;
         /** pointer to the transforms in the 'DetectBuffer entry for this list */
         const DetectEngineTransforms *transforms;
@@ -695,7 +700,10 @@ typedef struct DetectBufferMpmRegistry_ {
     union {
         /* app-layer matching: use if type == DETECT_BUFFER_MPM_TYPE_APP */
         struct {
-            InspectionBufferGetDataPtr GetData;
+            union {
+                InspectionBufferGetDataPtr GetData;
+                InspectionMultiBufferGetDataPtr GetMultiData;
+            };
             AppProto alproto;
             int tx_min_progress;
         } app_v2;
@@ -946,7 +954,6 @@ typedef struct DetectEngineCtx_ {
     struct {
         uint32_t content_limit;
         uint32_t content_inspect_min_size;
-        uint32_t content_inspect_window;
     } filedata_config[ALPROTO_MAX];
 
 #ifdef PROFILE_RULES
@@ -1019,8 +1026,8 @@ typedef struct DetectEngineCtx_ {
     /** per keyword flag indicating if a prefilter has been
      *  set for it. If true, the setup function will have to
      *  run. */
-    bool sm_types_prefilter[DETECT_TBLSIZE];
-    bool sm_types_silent_error[DETECT_TBLSIZE];
+    bool *sm_types_prefilter;
+    bool *sm_types_silent_error;
 
     /* classification config parsing */
 
@@ -1170,8 +1177,6 @@ typedef struct DetectEngineThreadCtx_ {
         uint32_t *to_clear_queue;
     } multi_inspect;
 
-    uint16_t flags; /**< DETECT_ENGINE_THREAD_CTX_* flags */
-
     /* true if tx_id is set */
     bool tx_id_set;
     /** ID of the transaction currently being inspected. */
@@ -1226,6 +1231,18 @@ typedef struct DetectEngineThreadCtx_ {
 
     AppLayerDecoderEvents *decoder_events;
     uint16_t events;
+
+    /** stats id for lua rule errors */
+    uint16_t lua_rule_errors;
+
+    /** stats id for lua blocked function counts */
+    uint16_t lua_blocked_function_errors;
+
+    /** stats if for lua instruction limit errors */
+    uint16_t lua_instruction_limit_errors;
+
+    /** stat of lua memory limit errors. */
+    uint16_t lua_memory_limit_errors;
 
 #ifdef DEBUG
     uint64_t pkt_stream_add_cnt;
@@ -1352,6 +1369,7 @@ typedef struct MpmStore_ {
 
 } MpmStore;
 
+typedef void (*PrefilterPktFn)(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx);
 typedef void (*PrefilterFrameFn)(DetectEngineThreadCtx *det_ctx, const void *pectx, Packet *p,
         const struct Frames *frames, const struct Frame *frame);
 
@@ -1370,11 +1388,13 @@ typedef struct PrefilterEngineList_ {
 
     uint8_t frame_type;
 
+    SignatureMask pkt_mask; /**< mask for pkt engines */
+
     /** Context for matching. Might be MpmCtx for MPM engines, other ctx'
      *  for other engines. */
     void *pectx;
 
-    void (*Prefilter)(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx);
+    PrefilterPktFn Prefilter;
     PrefilterTxFn PrefilterTx;
     PrefilterFrameFn PrefilterFrame;
 
@@ -1395,6 +1415,7 @@ typedef struct PrefilterEngine_ {
     AppProto alproto;
 
     union {
+        SignatureMask pkt_mask; /**< mask for pkt engines */
         /** Minimal Tx progress we need before running the engine. Only used
          *  with Tx Engine */
         uint8_t tx_min_progress;
@@ -1406,7 +1427,7 @@ typedef struct PrefilterEngine_ {
     void *pectx;
 
     union {
-        void (*Prefilter)(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx);
+        PrefilterPktFn Prefilter;
         PrefilterTxFn PrefilterTx;
         PrefilterFrameFn PrefilterFrame;
     } cb;
@@ -1552,7 +1573,7 @@ typedef struct DetectEngineMasterCtx_ {
 } DetectEngineMasterCtx;
 
 /* Table with all SigMatch registrations */
-extern SigTableElmt sigmatch_table[DETECT_TBLSIZE];
+extern SigTableElmt *sigmatch_table;
 
 /** Remember to add the options in SignatureIsIPOnly() at detect.c otherwise it wont be part of a signature group */
 

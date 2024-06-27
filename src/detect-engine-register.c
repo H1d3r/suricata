@@ -59,6 +59,8 @@
 #include "detect-tls-cert-issuer.h"
 #include "detect-tls-cert-subject.h"
 #include "detect-tls-cert-serial.h"
+#include "detect-tls-alpn.h"
+#include "detect-tls-subjectaltname.h"
 #include "detect-tls-random.h"
 #include "detect-tls-ja3-hash.h"
 #include "detect-tls-ja3-string.h"
@@ -211,13 +213,6 @@
 #include "detect-rfb-name.h"
 #include "detect-target.h"
 #include "detect-template-rust-buffer.h"
-#include "detect-dhcp-leasetime.h"
-#include "detect-dhcp-rebinding-time.h"
-#include "detect-dhcp-renewal-time.h"
-#include "detect-snmp-usm.h"
-#include "detect-snmp-version.h"
-#include "detect-snmp-community.h"
-#include "detect-snmp-pdu_type.h"
 #include "detect-mqtt-type.h"
 #include "detect-mqtt-flags.h"
 #include "detect-mqtt-qos.h"
@@ -241,7 +236,6 @@
 #include "detect-quic-cyu-hash.h"
 #include "detect-quic-cyu-string.h"
 #include "detect-ja4-hash.h"
-#include "detect-websocket.h"
 
 #include "detect-bypass.h"
 #include "detect-ftpdata.h"
@@ -259,6 +253,7 @@
 #include "detect-transform-xor.h"
 #include "detect-transform-casechange.h"
 #include "detect-transform-header-lowercase.h"
+#include "detect-transform-base64.h"
 
 #include "util-rule-vars.h"
 
@@ -282,7 +277,6 @@
 #include "detect-ssl-version.h"
 #include "detect-ssl-state.h"
 #include "detect-modbus.h"
-#include "detect-cipservice.h"
 #include "detect-dnp3.h"
 #include "detect-ike-exch-type.h"
 #include "detect-ike-spi.h"
@@ -320,6 +314,9 @@
 #include "util-path.h"
 #include "util-mpm-ac.h"
 #include "runmodes.h"
+
+int DETECT_TBLSIZE = 0;
+int DETECT_TBLSIZE_IDX = DETECT_TBLSIZE_STATIC;
 
 static void PrintFeatureList(const SigTableElmt *e, char sep)
 {
@@ -389,7 +386,7 @@ static void SigMultilinePrint(int i, const char *prefix)
 
 int SigTableList(const char *keyword)
 {
-    size_t size = sizeof(sigmatch_table) / sizeof(SigTableElmt);
+    size_t size = DETECT_TBLSIZE;
     size_t i;
 
     if (keyword == NULL) {
@@ -464,15 +461,32 @@ int SigTableList(const char *keyword)
 
 static void DetectFileHandlerRegister(void)
 {
-    for (int i = 0; i < DETECT_TBLSIZE; i++) {
+    for (int i = 0; i < DETECT_TBLSIZE_STATIC; i++) {
         if (filehandler_table[i].name)
             DetectFileRegisterFileProtocols(&filehandler_table[i]);
     }
 }
 
+void SigTableCleanup(void)
+{
+    if (sigmatch_table != NULL) {
+        SCFree(sigmatch_table);
+        sigmatch_table = NULL;
+        DETECT_TBLSIZE = 0;
+    }
+}
+
 void SigTableSetup(void)
 {
-    memset(sigmatch_table, 0, sizeof(sigmatch_table));
+    if (sigmatch_table == NULL) {
+        DETECT_TBLSIZE = DETECT_TBLSIZE_STATIC + DETECT_TBLSIZE_STEP;
+        sigmatch_table = SCCalloc(DETECT_TBLSIZE, sizeof(SigTableElmt));
+        if (sigmatch_table == NULL) {
+            DETECT_TBLSIZE = 0;
+            FatalError("Could not allocate sigmatch_table");
+            return;
+        }
+    }
 
     DetectSidRegister();
     DetectPriorityRegister();
@@ -531,8 +545,6 @@ void SigTableSetup(void)
     DetectDnsAnswerNameRegister();
     DetectDnsQueryNameRegister();
     DetectModbusRegister();
-    DetectCipServiceRegister();
-    DetectEnipCommandRegister();
     DetectDNP3Register();
 
     DetectIkeExchTypeRegister();
@@ -551,6 +563,8 @@ void SigTableSetup(void)
     DetectTlsFingerprintRegister();
     DetectTlsCertsRegister();
     DetectTlsCertChainLenRegister();
+    DetectTlsSubjectAltNameRegister();
+    DetectTlsAlpnRegister();
     DetectTlsRandomRegister();
 
     DetectTlsJa3HashRegister();
@@ -680,13 +694,6 @@ void SigTableSetup(void)
     DetectRfbNameRegister();
     DetectTargetRegister();
     DetectTemplateRustBufferRegister();
-    DetectDHCPLeaseTimeRegister();
-    DetectDHCPRebindingTimeRegister();
-    DetectDHCPRenewalTimeRegister();
-    DetectSNMPUsmRegister();
-    DetectSNMPVersionRegister();
-    DetectSNMPCommunityRegister();
-    DetectSNMPPduTypeRegister();
     DetectMQTTTypeRegister();
     DetectMQTTFlagsRegister();
     DetectMQTTQosRegister();
@@ -710,7 +717,6 @@ void SigTableSetup(void)
     DetectQuicCyuHashRegister();
     DetectQuicCyuStringRegister();
     DetectJa4HashRegister();
-    DetectWebsocketRegister();
 
     DetectBypassRegister();
     DetectConfigRegister();
@@ -728,8 +734,14 @@ void SigTableSetup(void)
     DetectTransformToLowerRegister();
     DetectTransformToUpperRegister();
     DetectTransformHeaderLowercaseRegister();
+    DetectTransformFromBase64DecodeRegister();
 
     DetectFileHandlerRegister();
+
+    ScDetectSNMPRegister();
+    ScDetectDHCPRegister();
+    ScDetectWebsocketRegister();
+    ScDetectEnipRegister();
 
     /* close keyword registration */
     DetectBufferTypeCloseRegistration();

@@ -37,6 +37,7 @@
 
 #include "detect-tcp-flags.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 
 #include "util-debug.h"
 
@@ -150,12 +151,14 @@ static int DetectFlagsMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
 {
     SCEnter();
 
-    if (!(PKT_IS_TCP(p)) || PKT_IS_PSEUDOPKT(p)) {
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
+    if (!(PacketIsTCP(p))) {
         SCReturnInt(0);
     }
 
     const DetectFlagsData *de = (const DetectFlagsData *)ctx;
-    const uint8_t flags = p->tcph->th_flags;
+    const TCPHdr *tcph = PacketGetTCP(p);
+    const uint8_t flags = tcph->th_flags;
 
     return FlagsMatch(flags, de->modifier, de->flags, de->ignored_flags);
 }
@@ -551,7 +554,8 @@ int DetectFlagsSignatureNeedsSynOnlyPackets(const Signature *s)
 static void
 PrefilterPacketFlagsMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
 {
-    if (!(PKT_IS_TCP(p)) || PKT_IS_PSEUDOPKT(p)) {
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
+    if (!(PacketIsTCP(p))) {
         SCReturn;
     }
 
@@ -559,7 +563,8 @@ PrefilterPacketFlagsMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void 
     if (!PrefilterPacketHeaderExtraMatch(ctx, p))
         return;
 
-    const uint8_t flags = p->tcph->th_flags;
+    const TCPHdr *tcph = PacketGetTCP(p);
+    const uint8_t flags = tcph->th_flags;
     if (FlagsMatch(flags, ctx->v1.u8[0], ctx->v1.u8[1], ctx->v1.u8[2]))
     {
         SCLogDebug("packet matches TCP flags %02x", ctx->v1.u8[1]);
@@ -590,11 +595,8 @@ PrefilterPacketFlagsCompare(PrefilterPacketHeaderValue v, void *smctx)
 
 static int PrefilterSetupTcpFlags(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_FLAGS,
-            PrefilterPacketFlagsSet,
-            PrefilterPacketFlagsCompare,
-            PrefilterPacketFlagsMatch);
-
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_FLAGS, SIG_MASK_REQUIRE_REAL_PKT,
+            PrefilterPacketFlagsSet, PrefilterPacketFlagsCompare, PrefilterPacketFlagsMatch);
 }
 
 static bool PrefilterTcpFlagsIsPrefilterable(const Signature *s)
@@ -669,9 +671,9 @@ static int FlagsTestParse03 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_ACK|TH_PUSH|TH_SYN|TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_ACK | TH_PUSH | TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("AP+");
 
@@ -723,9 +725,9 @@ static int FlagsTestParse04 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_SYN;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_SYN;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("A");
 
@@ -778,9 +780,9 @@ static int FlagsTestParse05 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_ACK|TH_PUSH|TH_SYN|TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_ACK | TH_PUSH | TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("+AP,SR");
 
@@ -833,9 +835,9 @@ static int FlagsTestParse06 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_ACK|TH_PUSH|TH_SYN|TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_ACK | TH_PUSH | TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("+AP,UR");
 
@@ -887,9 +889,9 @@ static int FlagsTestParse07 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_SYN|TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("*AP");
 
@@ -942,9 +944,9 @@ static int FlagsTestParse08 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_SYN|TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("*SA");
 
@@ -996,9 +998,9 @@ static int FlagsTestParse09 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_SYN|TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("!PA");
 
@@ -1050,9 +1052,9 @@ static int FlagsTestParse10 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_SYN|TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("!AP");
 
@@ -1104,9 +1106,9 @@ static int FlagsTestParse11 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_SYN|TH_RST|TH_URG;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_SYN | TH_RST | TH_URG;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("*AP,SR");
 
@@ -1159,9 +1161,9 @@ static int FlagsTestParse12 (void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_SYN;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_SYN;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("0");
 
@@ -1245,9 +1247,9 @@ static int FlagsTestParse15(void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_ECN | TH_CWR | TH_SYN | TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_ECN | TH_CWR | TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("EC+");
 
@@ -1297,9 +1299,9 @@ static int FlagsTestParse16(void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_ECN | TH_SYN | TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_ECN | TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("EC*");
 
@@ -1352,9 +1354,9 @@ static int FlagsTestParse17(void)
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     memset(&tcph, 0, sizeof(TCPHdr));
 
-    p->ip4h = &ipv4h;
-    p->tcph = &tcph;
-    p->tcph->th_flags = TH_ECN | TH_SYN | TH_RST;
+    UTHSetIPV4Hdr(p, &ipv4h);
+    tcph.th_flags = TH_ECN | TH_SYN | TH_RST;
+    UTHSetTCPHdr(p, &tcph);
 
     de = DetectFlagsParse("EC+");
 

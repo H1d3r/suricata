@@ -58,8 +58,7 @@
 
 #define PRINT_BUF_LEN 46
 
-#define OUTPUT_BUFFER_SIZE   65535
-#define CERT_ENC_BUFFER_SIZE 2048
+#define OUTPUT_BUFFER_SIZE 65535
 
 #define LOG_TLS_DEFAULT  0
 #define LOG_TLS_EXTENDED 1
@@ -478,7 +477,7 @@ static int LogTlsLogger(ThreadVars *tv, void *thread_data, const Packet *p,
 {
     LogTlsLogThread *aft = (LogTlsLogThread *)thread_data;
     LogTlsFileCtx *hlog = aft->tlslog_ctx;
-    int ipproto = (PKT_IS_IPV4(p)) ? AF_INET : AF_INET6;
+    int ipproto = (PacketIsIPv4(p)) ? AF_INET : AF_INET6;
 
     SSLState *ssl_state = (SSLState *)state;
     if (unlikely(ssl_state == NULL)) {

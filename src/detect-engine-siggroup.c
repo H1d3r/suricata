@@ -185,8 +185,6 @@ void SigGroupHeadFree(const DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 
     PrefilterCleanupRuleGroup(de_ctx, sgh);
     SCFree(sgh);
-
-    return;
 }
 
 /**
@@ -316,8 +314,6 @@ void SigGroupHeadHashFree(DetectEngineCtx *de_ctx)
 
     HashListTableFree(de_ctx->sgh_hash_table);
     de_ctx->sgh_hash_table = NULL;
-
-    return;
 }
 
 /**
@@ -471,7 +467,6 @@ void SigGroupHeadSetSigCnt(SigGroupHead *sgh, uint32_t max_idx)
     }
     sgh->init->sig_cnt = cnt;
 #endif
-    return;
 }
 
 /**
@@ -622,8 +617,6 @@ void SigGroupHeadSetupFiles(const DetectEngineCtx *de_ctx, SigGroupHead *sgh)
             sgh->filestore_cnt++;
         }
     }
-
-    return;
 }
 
 /** \brief build an array of rule id's for sigs with no prefilter
@@ -1051,9 +1044,10 @@ static int SigGroupHeadTest06(void)
 
     Packet *p = UTHBuildPacketSrcDst(NULL, 0, IPPROTO_ICMP, "192.168.1.1", "1.2.3.4");
     FAIL_IF_NULL(p);
+    FAIL_IF_NOT(PacketIsICMPv4(p));
 
-    p->icmpv4h->type = 5;
-    p->icmpv4h->code = 1;
+    p->l4.hdrs.icmpv4h->type = 5;
+    p->l4.hdrs.icmpv4h->code = 1;
 
     /* originally ip's were
     p.src.addr_data32[0] = 0xe08102d3;

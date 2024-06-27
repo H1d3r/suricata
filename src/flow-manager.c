@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2023 Open Information Security Foundation
+/* Copyright (C) 2007-2024 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -28,7 +28,6 @@
 #include "tm-threads.h"
 #include "runmodes.h"
 
-#include "util-random.h"
 #include "util-time.h"
 
 #include "flow.h"
@@ -41,23 +40,16 @@
 #include "flow-storage.h"
 #include "flow-spare-pool.h"
 
-#include "stream-tcp-reassemble.h"
 #include "stream-tcp.h"
 
-#include "util-unittest.h"
-#include "util-unittest-helper.h"
 #include "util-device.h"
 
 #include "util-debug.h"
 
 #include "threads.h"
-#include "detect.h"
-#include "detect-engine-state.h"
-#include "stream.h"
-
-#include "app-layer-parser.h"
 
 #include "host-timeout.h"
+#include "defrag-hash.h"
 #include "defrag-timeout.h"
 #include "ippair-timeout.h"
 #include "app-layer-htp-range.h"
@@ -65,9 +57,6 @@
 #include "output-flow.h"
 
 #include "runmode-unix-socket.h"
-
-/* Run mode selected at suricata.c */
-extern int run_mode;
 
 /** queue to pass flows to cleanup/log thread(s) */
 FlowQueue flow_recycle_q;
@@ -112,14 +101,6 @@ void FlowTimeoutsEmergency(void)
 {
     SC_ATOMIC_SET(flow_timeouts, flow_timeouts_emerg);
 }
-
-/* 1 seconds */
-#define FLOW_NORMAL_MODE_UPDATE_DELAY_SEC 1
-#define FLOW_NORMAL_MODE_UPDATE_DELAY_NSEC 0
-/* 0.3 seconds */
-#define FLOW_EMERG_MODE_UPDATE_DELAY_SEC 0
-#define FLOW_EMERG_MODE_UPDATE_DELAY_NSEC 300000
-#define NEW_FLOW_COUNT_COND 10
 
 typedef struct FlowTimeoutCounters_ {
     uint32_t rows_checked;
@@ -186,7 +167,6 @@ again:
 
     /* reset count, so we can kill and respawn (unix socket) */
     SC_ATOMIC_SET(flowmgr_cnt, 0);
-    return;
 }
 
 /** \internal
@@ -195,10 +175,10 @@ again:
  *  \param f flow
  *  \param ts timestamp
  *
- *  \retval 0 not timed out
- *  \retval 1 timed out
+ *  \retval false not timed out
+ *  \retval true timed out
  */
-static int FlowManagerFlowTimeout(Flow *f, SCTime_t ts, uint32_t *next_ts, const bool emerg)
+static bool FlowManagerFlowTimeout(Flow *f, SCTime_t ts, uint32_t *next_ts, const bool emerg)
 {
     uint32_t flow_times_out_at = f->timeout_at;
     if (emerg) {
@@ -210,12 +190,13 @@ static int FlowManagerFlowTimeout(Flow *f, SCTime_t ts, uint32_t *next_ts, const
 
     /* do the timeout check */
     if ((uint64_t)flow_times_out_at >= SCTIME_SECS(ts)) {
-        return 0;
+        return false;
     }
 
-    return 1;
+    return true;
 }
 
+#ifdef CAPTURE_OFFLOAD
 /** \internal
  *  \brief check timeout of captured bypassed flow by querying capture method
  *
@@ -223,14 +204,13 @@ static int FlowManagerFlowTimeout(Flow *f, SCTime_t ts, uint32_t *next_ts, const
  *  \param ts timestamp
  *  \param counters Flow timeout counters
  *
- *  \retval 0 not timeout
- *  \retval 1 timeout (or not capture bypassed)
+ *  \retval false not timeout
+ *  \retval true timeout (or not capture bypassed)
  */
-static inline int FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters *counters)
+static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters *counters)
 {
-#ifdef CAPTURE_OFFLOAD
     if (f->flow_state != FLOW_STATE_CAPTURE_BYPASSED) {
-        return 1;
+        return true;
     }
 
     FlowBypassInfo *fc = FlowGetStorageById(f, GetFlowBypassInfoID());
@@ -253,30 +233,41 @@ static inline int FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters 
             }
             counters->bypassed_pkts += pkts_tosrc + pkts_todst;
             counters->bypassed_bytes += bytes_tosrc + bytes_todst;
-            return 0;
-        } else {
-            SCLogDebug("No new packet, dead flow %"PRId64"", FlowGetId(f));
-            if (f->livedev) {
-                if (FLOW_IS_IPV4(f)) {
-                    LiveDevSubBypassStats(f->livedev, 1, AF_INET);
-                } else if (FLOW_IS_IPV6(f)) {
-                    LiveDevSubBypassStats(f->livedev, 1, AF_INET6);
-                }
-            }
-            counters->bypassed_count++;
-            return 1;
+            return false;
         }
+        SCLogDebug("No new packet, dead flow %" PRId64 "", FlowGetId(f));
+        if (f->livedev) {
+            if (FLOW_IS_IPV4(f)) {
+                LiveDevSubBypassStats(f->livedev, 1, AF_INET);
+            } else if (FLOW_IS_IPV6(f)) {
+                LiveDevSubBypassStats(f->livedev, 1, AF_INET6);
+            }
+        }
+        counters->bypassed_count++;
     }
-#endif /* CAPTURE_OFFLOAD */
-    return 1;
+    return true;
 }
+#endif /* CAPTURE_OFFLOAD */
 
 typedef struct FlowManagerTimeoutThread {
     /* used to temporarily store flows that have timed out and are
-     * removed from the hash */
+     * removed from the hash to reduce locking contention */
     FlowQueuePrivate aside_queue;
 } FlowManagerTimeoutThread;
 
+/**
+ * \internal
+ *
+ * \brief Process the temporary Aside Queue
+ *        This means that as long as a flow f is not waiting on detection
+ *        engine to finish dealing with it, f will be put in the recycle
+ *        queue for further processing later on.
+ *
+ * \param td FM Timeout Thread instance
+ * \param counters Flow Timeout counters to be updated
+ *
+ * \retval Number of flows that were recycled
+ */
 static uint32_t ProcessAsideQueue(FlowManagerTimeoutThread *td, FlowTimeoutCounters *counters)
 {
     FlowQueuePrivate recycle = { NULL, NULL, 0 };
@@ -289,11 +280,11 @@ static uint32_t ProcessAsideQueue(FlowManagerTimeoutThread *td, FlowTimeoutCount
 
         if (f->proto == IPPROTO_TCP &&
                 !(f->flags & (FLOW_TIMEOUT_REASSEMBLY_DONE | FLOW_ACTION_DROP)) &&
-                !FlowIsBypassed(f) && FlowForceReassemblyNeedReassembly(f) == 1) {
+                !FlowIsBypassed(f) && FlowNeedsReassembly(f)) {
             /* Send the flow to its thread */
-            FlowForceReassemblyForFlow(f);
+            FlowSendToLocalThread(f);
             FLOWLOCK_UNLOCK(f);
-            /* flow ownership is passed to the worker thread */
+            /* flow ownership is already passed to the worker thread */
 
             counters->flows_aside_needs_work++;
             continue;
@@ -339,8 +330,7 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
          * be modified when we have both the flow and hash row lock */
 
         /* timeout logic goes here */
-        if (FlowManagerFlowTimeout(f, ts, next_ts, emergency) == 0) {
-
+        if (FlowManagerFlowTimeout(f, ts, next_ts, emergency) == false) {
             counters->flows_notimeout++;
 
             prev_f = f;
@@ -352,6 +342,7 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
 
         Flow *next_flow = f->next;
 
+#ifdef CAPTURE_OFFLOAD
         /* never prune a flow that is used by a packet we
          * are currently processing in one of the threads */
         if (!FlowBypassedTimeout(f, ts, counters)) {
@@ -360,7 +351,7 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
             f = f->next;
             continue;
         }
-
+#endif
         f->flow_end_flags |= FLOW_END_FLAG_TIMEOUT;
 
         counters->flows_timeout++;
@@ -378,8 +369,17 @@ static void FlowManagerHashRowTimeout(FlowManagerTimeoutThread *td, Flow *f, SCT
         counters->rows_maxlen = checked;
 }
 
-static void FlowManagerHashRowClearEvictedList(
-        FlowManagerTimeoutThread *td, Flow *f, SCTime_t ts, FlowTimeoutCounters *counters)
+/**
+ * \internal
+ *
+ * \brief Clear evicted list from Flow Manager.
+ *        All the evicted flows are removed from the Flow bucket and added
+ *        to the temporary Aside Queue.
+ *
+ * \param td FM timeout thread instance
+ * \param f head of the evicted list
+ */
+static void FlowManagerHashRowClearEvictedList(FlowManagerTimeoutThread *td, Flow *f)
 {
     do {
         FLOWLOCK_WRLOCK(f);
@@ -454,6 +454,7 @@ static uint32_t FlowTimeoutHash(FlowManagerTimeoutThread *td, SCTime_t ts, const
                             SC_ATOMIC_SET(fb->next_ts, next_ts);
                     }
                     if (fb->evicted == NULL && fb->head == NULL) {
+                        /* row is empty */
                         SC_ATOMIC_SET(fb->next_ts, UINT_MAX);
                     }
                 } else {
@@ -463,7 +464,7 @@ static uint32_t FlowTimeoutHash(FlowManagerTimeoutThread *td, SCTime_t ts, const
                 FBLOCK_UNLOCK(fb);
                 /* processed evicted list */
                 if (evicted) {
-                    FlowManagerHashRowClearEvictedList(td, evicted, ts, counters);
+                    FlowManagerHashRowClearEvictedList(td, evicted);
                 }
             } else {
                 rows_skipped++;
@@ -487,8 +488,19 @@ static uint32_t FlowTimeoutHash(FlowManagerTimeoutThread *td, SCTime_t ts, const
 }
 
 /** \internal
+ *
  *  \brief handle timeout for a slice of hash rows
- *  If we wrap around we call FlowTimeoutHash twice */
+ *         If we wrap around we call FlowTimeoutHash twice
+ *  \param td FM timeout thread
+ *  \param ts timeout in seconds
+ *  \param hash_min lower bound of the row slice
+ *  \param hash_max upper bound of the row slice
+ *  \param counters Flow timeout counters to be passed
+ *  \param rows number of rows for this worker unit
+ *  \param pos position of the beginning of row slice in the hash table
+ *
+ *  \retval number of successfully timed out flows
+ */
 static uint32_t FlowTimeoutHashInChunks(FlowManagerTimeoutThread *td, SCTime_t ts,
         const uint32_t hash_min, const uint32_t hash_max, FlowTimeoutCounters *counters,
         const uint32_t rows, uint32_t *pos)
@@ -523,8 +535,10 @@ again:
  *  \brief move all flows out of a hash row
  *
  *  \param f last flow in the hash row
+ *  \param recycle_q Flow recycle queue
+ *  \param mode emergency or not
  *
- *  \retval cnt removed out flows
+ *  \retval cnt number of flows removed from the hash and added to the recycle queue
  */
 static uint32_t FlowManagerHashRowCleanup(Flow *f, FlowQueuePrivate *recycle_q, const int mode)
 {
@@ -559,6 +573,7 @@ static uint32_t FlowManagerHashRowCleanup(Flow *f, FlowQueuePrivate *recycle_q, 
     return cnt;
 }
 
+#define RECYCLE_MAX_QUEUE_ITEMS 25
 /**
  *  \brief remove all flows from the hash
  *
@@ -584,21 +599,17 @@ static uint32_t FlowCleanupHash(void)
         }
 
         FBLOCK_UNLOCK(fb);
-        if (local_queue.len >= 25) {
+        if (local_queue.len >= RECYCLE_MAX_QUEUE_ITEMS) {
             FlowQueueAppendPrivate(&flow_recycle_q, &local_queue);
             FlowWakeupFlowRecyclerThread();
         }
     }
+    DEBUG_VALIDATE_BUG_ON(local_queue.len >= RECYCLE_MAX_QUEUE_ITEMS);
     FlowQueueAppendPrivate(&flow_recycle_q, &local_queue);
     FlowWakeupFlowRecyclerThread();
 
     return cnt;
 }
-
-typedef struct FlowQueueTimeoutCounters {
-    uint32_t flows_removed;
-    uint32_t flows_timeout;
-} FlowQueueTimeoutCounters;
 
 typedef struct FlowCounters_ {
     uint16_t flow_mgr_full_pass;
@@ -632,6 +643,8 @@ typedef struct FlowManagerThreadData_ {
     FlowCounters cnt;
 
     FlowManagerTimeoutThread timeout;
+    uint16_t counter_defrag_timeout;
+    uint16_t counter_defrag_memuse;
 } FlowManagerThreadData;
 
 static void FlowCountersInit(ThreadVars *t, FlowCounters *fc)
@@ -704,6 +717,8 @@ static TmEcode FlowManagerThreadInit(ThreadVars *t, const void *initdata, void *
     *data = ftd;
 
     FlowCountersInit(t, &ftd->cnt);
+    ftd->counter_defrag_timeout = StatsRegisterCounter("defrag.mgr.tracker_timeout", t);
+    ftd->counter_defrag_memuse = StatsRegisterCounter("defrag.memuse", t);
 
     PacketPoolInit();
     return TM_ECODE_OK;
@@ -730,6 +745,13 @@ static TmEcode FlowManagerThreadDeinit(ThreadVars *t, void *data)
  *  a rapid increase of the busy score, which could lead to the flow manager
  *  suddenly scanning a much larger slice of the hash leading to a burst
  *  in scan/eviction work.
+ *
+ *  \param rows number of rows for the work unit
+ *  \param mp current memcap pressure value
+ *  \param emergency emergency mode is set or not
+ *  \param wu_sleep holds value of sleep time per worker unit
+ *  \param wu_rows holds value of calculated rows to be processed per second
+ *  \param rows_sec same as wu_rows, only used for counter updates
  */
 static void GetWorkUnitSizing(const uint32_t rows, const uint32_t mp, const bool emergency,
         uint64_t *wu_sleep, uint32_t *wu_rows, uint32_t *rows_sec)
@@ -901,7 +923,11 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
         }
         if (other_last_sec == 0 || other_last_sec < (uint32_t)SCTIME_SECS(ts)) {
             if (ftd->instance == 0) {
-                DefragTimeoutHash(ts);
+                StatsSetUI64(th_v, ftd->counter_defrag_memuse, DefragTrackerGetMemcap());
+                uint32_t defrag_cnt = DefragTimeoutHash(ts);
+                if (defrag_cnt) {
+                    StatsAddUI64(th_v, ftd->counter_defrag_timeout, defrag_cnt);
+                }
                 HostTimeoutHash(ts);
                 IPPairTimeoutHash(ts);
                 HttpRangeContainersTimeoutHash(ts);
@@ -974,7 +1000,6 @@ void FlowManagerThreadSpawn(void)
             FatalError("flow manager thread spawn failed");
         }
     }
-    return;
 }
 
 typedef struct FlowRecyclerThreadData_ {
@@ -1042,8 +1067,6 @@ static void Recycler(ThreadVars *tv, FlowRecyclerThreadData *ftd, Flow *f)
     FLOWLOCK_UNLOCK(f);
 }
 
-extern uint32_t flow_spare_pool_block_size;
-
 /** \brief Thread that manages timed out flows.
  *
  *  \param td ThreadVars cast to void ptr
@@ -1084,7 +1107,7 @@ static TmEcode FlowRecycler(ThreadVars *th_v, void *thread_data)
 
             /* for every full sized block, add it to the spare pool */
             FlowQueuePrivateAppendFlow(&ret_queue, f);
-            if (ret_queue.len == flow_spare_pool_block_size) {
+            if (ret_queue.len == FLOW_SPARE_POOL_BLOCK_SIZE) {
                 FlowSparePoolReturnFlows(&ret_queue);
             }
         }
@@ -1175,7 +1198,6 @@ void FlowRecyclerThreadSpawn(void)
             FatalError("flow recycler thread spawn failed");
         }
     }
-    return;
 }
 
 /**
@@ -1242,7 +1264,6 @@ again:
 
     /* reset count, so we can kill and respawn (unix socket) */
     SC_ATOMIC_SET(flowrec_cnt, 0);
-    return;
 }
 
 void TmModuleFlowManagerRegister (void)

@@ -33,7 +33,7 @@ use std::ffi::CString;
 // packet in a connection. Note that there is no risk of collision with a
 // parsed packet identifier because in the protocol these are only 16 bit
 // unsigned.
-const MQTT_CONNECT_PKT_ID: u32 = std::u32::MAX;
+const MQTT_CONNECT_PKT_ID: u32 = u32::MAX;
 // Maximum message length in bytes. If the length of a message exceeds
 // this value, it will be truncated. Default: 1MB.
 static mut MAX_MSG_LEN: u32 = 1048576;
@@ -436,6 +436,7 @@ impl MQTTState {
                         current,
                         (current.len() - rem.len()) as i64,
                         MQTTFrameType::Pdu as u8,
+                        None,
                     );
                     SCLogDebug!("request msg {:?}", msg);
                     if let MQTTOperation::TRUNCATED(ref trunc) = msg.op {
@@ -521,6 +522,7 @@ impl MQTTState {
                         current,
                         (current.len() - rem.len()) as i64,
                         MQTTFrameType::Pdu as u8,
+                        None,
                     );
 
                     SCLogDebug!("response msg {:?}", msg);
@@ -595,7 +597,7 @@ impl MQTTState {
     ) {
         let hdr = stream_slice.as_slice();
         //MQTT payload has a fixed header of 2 bytes
-        let _mqtt_hdr = Frame::new(flow, stream_slice, hdr, 2, MQTTFrameType::Header as u8);
+        let _mqtt_hdr = Frame::new(flow, stream_slice, hdr, 2, MQTTFrameType::Header as u8, None);
         SCLogDebug!("mqtt_hdr Frame {:?}", _mqtt_hdr);
         let rem_length = input.header.remaining_length as usize;
         let data = &hdr[2..rem_length + 2];
@@ -605,6 +607,7 @@ impl MQTTState {
             data,
             rem_length as i64,
             MQTTFrameType::Data as u8,
+            None,
         );
         SCLogDebug!("mqtt_data Frame {:?}", _mqtt_data);
     }
@@ -616,6 +619,9 @@ impl MQTTState {
 pub unsafe extern "C" fn rs_mqtt_probing_parser(
     _flow: *const Flow, _direction: u8, input: *const u8, input_len: u32, _rdir: *mut u8,
 ) -> AppProto {
+    if input.is_null() {
+        return ALPROTO_UNKNOWN;
+    }
     let buf = build_slice!(input, input_len as usize);
     match parse_fixed_header(buf) {
         Ok((_, hdr)) => {

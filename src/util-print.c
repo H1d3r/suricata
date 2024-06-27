@@ -107,8 +107,6 @@ void PrintRawUriBuf(char *retbuf, uint32_t *offset, uint32_t retbuflen,
                             "\\x%02X", buf[u]);
         }
     }
-
-    return;
 }
 
 void PrintRawDataFp(FILE *fp, const uint8_t *buf, uint32_t buflen)
@@ -192,8 +190,6 @@ void PrintRawDataToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32
     }
     if (ch != 16)
         PrintBufferData((char *)dst_buf, dst_buf_offset_ptr, dst_buf_size, "\n");
-
-    return;
 }
 
 void PrintStringsToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32_t dst_buf_size,
@@ -208,13 +204,7 @@ void PrintStringsToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32
         }
     }
     dst_buf[dst_buf_size - 1] = 0;
-
-    return;
 }
-
-#ifndef s6_addr16
-# define s6_addr16 __u6_addr.__u6_addr16
-#endif
 
 static const char *PrintInetIPv6(const void *src, char *dst, socklen_t size)
 {

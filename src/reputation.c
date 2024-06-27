@@ -73,8 +73,6 @@ static void SRepCIDRFreeUserData(void *data)
 {
     if (data != NULL)
         SCFree(data);
-
-    return;
 }
 
 static void SRepCIDRAddNetblock(SRepCIDRTree *cidr_ctx, char *ip, int cat, uint8_t value)
@@ -123,47 +121,47 @@ static void SRepCIDRAddNetblock(SRepCIDRTree *cidr_ctx, char *ip, int cat, uint8
     }
 }
 
-static uint8_t SRepCIDRGetIPv4IPRep(SRepCIDRTree *cidr_ctx, uint8_t *ipv4_addr, uint8_t cat)
+static int8_t SRepCIDRGetIPv4IPRep(SRepCIDRTree *cidr_ctx, uint8_t *ipv4_addr, uint8_t cat)
 {
     void *user_data = NULL;
     (void)SCRadixFindKeyIPV4BestMatch(ipv4_addr, cidr_ctx->srepIPV4_tree[cat], &user_data);
     if (user_data == NULL)
-        return 0;
+        return -1;
 
     SReputation *r = (SReputation *)user_data;
     return r->rep[cat];
 }
 
-static uint8_t SRepCIDRGetIPv6IPRep(SRepCIDRTree *cidr_ctx, uint8_t *ipv6_addr, uint8_t cat)
+static int8_t SRepCIDRGetIPv6IPRep(SRepCIDRTree *cidr_ctx, uint8_t *ipv6_addr, uint8_t cat)
 {
     void *user_data = NULL;
     (void)SCRadixFindKeyIPV6BestMatch(ipv6_addr, cidr_ctx->srepIPV6_tree[cat], &user_data);
     if (user_data == NULL)
-        return 0;
+        return -1;
 
     SReputation *r = (SReputation *)user_data;
     return r->rep[cat];
 }
 
-uint8_t SRepCIDRGetIPRepSrc(SRepCIDRTree *cidr_ctx, Packet *p, uint8_t cat, uint32_t version)
+int8_t SRepCIDRGetIPRepSrc(SRepCIDRTree *cidr_ctx, Packet *p, uint8_t cat, uint32_t version)
 {
-    uint8_t rep = 0;
+    int8_t rep = -3;
 
-    if (PKT_IS_IPV4(p))
+    if (PacketIsIPv4(p))
         rep = SRepCIDRGetIPv4IPRep(cidr_ctx, (uint8_t *)GET_IPV4_SRC_ADDR_PTR(p), cat);
-    else if (PKT_IS_IPV6(p))
+    else if (PacketIsIPv6(p))
         rep = SRepCIDRGetIPv6IPRep(cidr_ctx, (uint8_t *)GET_IPV6_SRC_ADDR(p), cat);
 
     return rep;
 }
 
-uint8_t SRepCIDRGetIPRepDst(SRepCIDRTree *cidr_ctx, Packet *p, uint8_t cat, uint32_t version)
+int8_t SRepCIDRGetIPRepDst(SRepCIDRTree *cidr_ctx, Packet *p, uint8_t cat, uint32_t version)
 {
-    uint8_t rep = 0;
+    int8_t rep = -3;
 
-    if (PKT_IS_IPV4(p))
+    if (PacketIsIPv4(p))
         rep = SRepCIDRGetIPv4IPRep(cidr_ctx, (uint8_t *)GET_IPV4_DST_ADDR_PTR(p), cat);
-    else if (PKT_IS_IPV6(p))
+    else if (PacketIsIPv6(p))
         rep = SRepCIDRGetIPv6IPRep(cidr_ctx, (uint8_t *)GET_IPV6_DST_ADDR(p), cat);
 
     return rep;
@@ -264,7 +262,6 @@ static int SRepCatSplitLine(char *line, uint8_t *cat, char *shortname, size_t sh
     *cat = (uint8_t)c;
     strlcpy(shortname, ptrs[1], shortname_len);
     return 0;
-
 }
 
 /**
@@ -432,7 +429,6 @@ static int SRepLoadFile(SRepCIDRTree *cidr_ctx, char *filename)
     fclose(fp);
     fp = NULL;
     return r;
-
 }
 
 int SRepLoadFileFromFD(SRepCIDRTree *cidr_ctx, FILE *fp)
@@ -584,17 +580,11 @@ int SRepInit(DetectEngineCtx *de_ctx)
     ConfNode *file = NULL;
     const char *filename = NULL;
     int init = 0;
-    int i = 0;
 
     de_ctx->srepCIDR_ctx = (SRepCIDRTree *)SCCalloc(1, sizeof(SRepCIDRTree));
     if (de_ctx->srepCIDR_ctx == NULL)
         exit(EXIT_FAILURE);
     SRepCIDRTree *cidr_ctx = de_ctx->srepCIDR_ctx;
-
-    for (i = 0; i < SREP_MAX_CATS; i++) {
-        cidr_ctx->srepIPV4_tree[i] = NULL;
-        cidr_ctx->srepIPV6_tree[i] = NULL;
-    }
 
     if (SRepGetVersion() == 0) {
         SC_ATOMIC_INIT(srep_eversion);

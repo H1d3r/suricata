@@ -38,7 +38,6 @@
 #include "detect-engine-dcepayload.h"
 #include "detect-engine-state.h"
 #include "detect-engine-tag.h"
-#include "detect-engine-enip.h"
 #include "detect-fast-pattern.h"
 #include "flow.h"
 #include "flow-timeout.h"
@@ -79,6 +78,7 @@
 #include "util-memcmp.h"
 #include "util-misc.h"
 #include "util-signal.h"
+#include "util-base64.h"
 
 #include "reputation.h"
 #include "util-atomic.h"
@@ -102,15 +102,16 @@
 
 #include "util-streaming-buffer.h"
 #include "util-lua.h"
-#include "util-luajit.h"
 #include "tm-modules.h"
 #include "tmqh-packetpool.h"
 #include "decode-chdlc.h"
 #include "decode-geneve.h"
 #include "decode-nsh.h"
+#include "decode-pppoe.h"
 #include "decode-raw.h"
 #include "decode-vntag.h"
 #include "decode-vxlan.h"
+#include "decode-pppoe.h"
 
 #include "output-json-stats.h"
 
@@ -202,7 +203,6 @@ static void RegisterUnittests(void)
     SCAtomicRegisterTests();
     MemrchrRegisterTests();
     AppLayerUnittestsRegister();
-    MimeDecRegisterTests();
     StreamingBufferRegisterTests();
     MacSetRegisterTests();
 #ifdef OS_WIN32
@@ -232,12 +232,6 @@ void RunUnittests(int list_unittests, const char *regex_arg)
     /* Initializations for global vars, queues, etc (memsets, mutex init..) */
     GlobalsInitPreConfig();
     EngineModeSetIDS();
-
-#ifdef HAVE_LUAJIT
-    if (LuajitSetupStatesPool() != 0) {
-        exit(EXIT_FAILURE);
-    }
-#endif
 
     default_packet_size = DEFAULT_PACKET_SIZE;
     /* load the pattern matchers */
@@ -289,10 +283,6 @@ void RunUnittests(int list_unittests, const char *regex_arg)
             exit(EXIT_FAILURE);
         }
     }
-
-#ifdef HAVE_LUAJIT
-    LuajitFreeStatesPool();
-#endif
 
     exit(EXIT_SUCCESS);
 #else

@@ -15,7 +15,10 @@ Syntax:
 
 The script filename will be appended to your default rules location.
 
-The script has 2 parts, an init function and a match function. First, the init.
+A Lua rule script has 2 required functions, an ``init`` function and
+``match`` function, discussed below.
+
+Additionally, the script will run in a limited sandbox by default.
 
 Init function
 -------------
@@ -100,5 +103,45 @@ Entire script:
 
   return 0
 
-A comprehensive list of existing lua functions -  with examples - can be found at :ref:`lua-functions` (some of them, however,
-work only for the lua-output functionality).
+Sandbox and Available functions
+-------------------------------
+
+Lua rule scripts are run in a sandbox environment the applies the
+following restrictions:
+
+* reduced libraries
+* only allowed functions available
+* instruction count limit
+* memory allocation limit
+
+The following table lists the library and functions available:
+
+==================  =================================================================
+Package Name        Functions
+==================  =================================================================
+base                assert, ipairs, next, pairs, print, rawequal, rawlen, select, 
+                    tonumber, tostring, type, warn, rawget, rawset, error
+table               concat, insert, move, pack, remove, sort, unpack
+string              byte, char, dump, find, format, gmatch, gsub, len, lower, match, 
+                    pack, packsize, rep, reverse, sub, unpack, upper
+math                abs, acos, asin, atan, atan2, ceil, cos, cosh, deg, exp, floor, 
+                    fmod, frexp, ldexp, log, log10, max, min, modf, pow, rad, random, 
+                    randomseed, sin, sinh, sqrt, tan, tanh, tointeger, type, ult
+utf8                offset, len, codes, char, codepoint
+==================  =================================================================
+
+Of note, the following standard libraries are not available:
+
+* coroutine
+* package
+* input and output
+* operating system facilities
+* debug
+
+This behavior can be modified via the ``security.lua`` section of :ref:`suricata-yaml-lua-config`
+
+.. note:: Suricata 8.0 has moved to Lua 5.4 and has builtin support for bitwise and utf8 operations now.
+
+A comprehensive list of existing lua functions - with examples - can
+be found at :ref:`lua-functions` (some of them, however, work only for
+the lua-output functionality).

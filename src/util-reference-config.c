@@ -29,7 +29,6 @@
 #include "util-reference-config.h"
 #include "conf.h"
 #include "util-unittest.h"
-#include "util-error.h"
 #include "util-debug.h"
 #include "util-fmemopen.h"
 
@@ -68,7 +67,6 @@ void SCReferenceConfInit(DetectEngineCtx *de_ctx)
     }
     de_ctx->reference_conf_regex_match =
             pcre2_match_data_create_from_pattern(de_ctx->reference_conf_regex, NULL);
-    return;
 }
 
 void SCReferenceConfDeinit(DetectEngineCtx *de_ctx)
@@ -168,13 +166,11 @@ static const char *SCRConfGetConfFilename(const DetectEngineCtx *de_ctx)
 /**
  * \brief Releases local resources used by the Reference Config API.
  */
-static void SCRConfDeInitLocalResources(DetectEngineCtx *de_ctx, FILE *fd)
+static void SCRConfDeInitLocalResources(FILE *fd)
 {
     if (fd != NULL) {
         fclose(fd);
     }
-
-    return;
 }
 
 /**
@@ -186,8 +182,6 @@ void SCRConfDeInitContext(DetectEngineCtx *de_ctx)
         HashTableFree(de_ctx->reference_conf_ht);
 
     de_ctx->reference_conf_ht = NULL;
-
-    return;
 }
 
 /**
@@ -321,7 +315,7 @@ static int SCRConfIsLineBlankOrComment(char *line)
 static bool SCRConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
 {
     char line[1024];
-    int runmode = RunmodeGetCurrent();
+    int runmode = SCRunmodeGet();
     bool is_conf_test_mode = runmode == RUNMODE_CONF_TEST;
     while (fgets(line, sizeof(line), fd) != NULL) {
         if (SCRConfIsLineBlankOrComment(line))
@@ -398,8 +392,6 @@ void SCRConfDeAllocSCRConfReference(SCRConfReference *ref)
 
         SCFree(ref);
     }
-
-    return;
 }
 
 /**
@@ -475,8 +467,6 @@ char SCRConfReferenceHashCompareFunc(void *data1, uint16_t datalen1,
 void SCRConfReferenceHashFree(void *data)
 {
     SCRConfDeAllocSCRConfReference(data);
-
-    return;
 }
 
 /**
@@ -507,7 +497,7 @@ int SCRConfLoadReferenceConfigFile(DetectEngineCtx *de_ctx, FILE *fd)
     }
 
     bool rc = SCRConfParseFile(de_ctx, fd);
-    SCRConfDeInitLocalResources(de_ctx, fd);
+    SCRConfDeInitLocalResources(fd);
 
     return rc ? 0 : -1;
 }
@@ -793,6 +783,4 @@ void SCRConfRegisterTests(void)
     UtRegisterTest("SCRConfTest05", SCRConfTest05);
     UtRegisterTest("SCRConfTest06", SCRConfTest06);
 #endif /* UNITTESTS */
-
-    return;
 }

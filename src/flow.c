@@ -31,8 +31,6 @@
 #include "decode.h"
 #include "conf.h"
 #include "threadvars.h"
-#include "tm-threads.h"
-#include "runmodes.h"
 
 #include "util-random.h"
 #include "util-time.h"
@@ -41,17 +39,13 @@
 #include "flow-queue.h"
 #include "flow-hash.h"
 #include "flow-util.h"
-#include "flow-var.h"
 #include "flow-private.h"
-#include "flow-timeout.h"
 #include "flow-manager.h"
 #include "flow-storage.h"
 #include "flow-bypass.h"
 #include "flow-spare-pool.h"
 
 #include "stream-tcp-private.h"
-#include "stream-tcp-reassemble.h"
-#include "stream-tcp.h"
 
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
@@ -60,12 +54,6 @@
 #include "util-macset.h"
 
 #include "util-debug.h"
-#include "util-privs.h"
-#include "util-validate.h"
-
-#include "detect.h"
-#include "detect-engine-state.h"
-#include "stream.h"
 
 #include "app-layer-parser.h"
 #include "app-layer-expectation.h"
@@ -107,9 +95,6 @@ SC_ATOMIC_DECLARE(uint64_t, flow_memuse);
 void FlowRegisterTests(void);
 void FlowInitFlowProto(void);
 int FlowSetProtoFreeFunc(uint8_t, void (*Free)(void *));
-
-/* Run mode selected at suricata.c */
-extern int run_mode;
 
 /**
  *  \brief Update memcap value
@@ -156,7 +141,6 @@ void FlowCleanupAppLayer(Flow *f)
     AppLayerParserStateCleanup(f, f->alstate, f->alparser);
     f->alstate = NULL;
     f->alparser = NULL;
-    return;
 }
 
 /** \brief Set the IPOnly scanned flag for 'direction'.
@@ -166,9 +150,7 @@ void FlowCleanupAppLayer(Flow *f)
   */
 void FlowSetIPOnlyFlag(Flow *f, int direction)
 {
-    direction ? (f->flags |= FLOW_TOSERVER_IPONLY_SET) :
-        (f->flags |= FLOW_TOCLIENT_IPONLY_SET);
-    return;
+    direction ? (f->flags |= FLOW_TOSERVER_IPONLY_SET) : (f->flags |= FLOW_TOCLIENT_IPONLY_SET);
 }
 
 /** \brief Set flag to indicate that flow has alerts
@@ -343,8 +325,8 @@ int FlowGetPacketDirection(const Flow *f, const Packet *p)
  */
 static inline int FlowUpdateSeenFlag(const Packet *p)
 {
-    if (PKT_IS_ICMPV4(p)) {
-        if (ICMPV4_IS_ERROR_MSG(p)) {
+    if (PacketIsICMPv4(p)) {
+        if (ICMPV4_IS_ERROR_MSG(p->icmp_s.type)) {
             return 0;
         }
     }
@@ -352,7 +334,7 @@ static inline int FlowUpdateSeenFlag(const Packet *p)
     return 1;
 }
 
-static inline void FlowUpdateTtlTS(Flow *f, Packet *p, uint8_t ttl)
+static inline void FlowUpdateTtlTS(Flow *f, uint8_t ttl)
 {
     if (f->min_ttl_toserver == 0) {
         f->min_ttl_toserver = ttl;
@@ -362,7 +344,7 @@ static inline void FlowUpdateTtlTS(Flow *f, Packet *p, uint8_t ttl)
     f->max_ttl_toserver = MAX(f->max_ttl_toserver, ttl);
 }
 
-static inline void FlowUpdateTtlTC(Flow *f, Packet *p, uint8_t ttl)
+static inline void FlowUpdateTtlTC(Flow *f, uint8_t ttl)
 {
     if (f->min_ttl_toclient == 0) {
         f->min_ttl_toclient = ttl;
@@ -372,10 +354,11 @@ static inline void FlowUpdateTtlTC(Flow *f, Packet *p, uint8_t ttl)
     f->max_ttl_toclient = MAX(f->max_ttl_toclient, ttl);
 }
 
-static inline void FlowUpdateEthernet(ThreadVars *tv, DecodeThreadVars *dtv,
-                                      Flow *f, EthernetHdr *ethh, bool toserver)
+static inline void FlowUpdateEthernet(
+        ThreadVars *tv, DecodeThreadVars *dtv, Flow *f, const Packet *p, bool toserver)
 {
-    if (ethh && MacSetFlowStorageEnabled()) {
+    if (PacketIsEthernet(p) && MacSetFlowStorageEnabled()) {
+        const EthernetHdr *ethh = PacketGetEthernet(p);
         MacSet *ms = FlowGetStorageById(f, MacSetGetFlowStorageID());
         if (ms != NULL) {
             if (toserver) {
@@ -450,12 +433,14 @@ void FlowHandlePacketUpdate(Flow *f, Packet *p, ThreadVars *tv, DecodeThreadVars
             f->flags &= ~FLOW_PROTO_DETECT_TS_DONE;
             p->flags |= PKT_PROTO_DETECT_TS_DONE;
         }
-        FlowUpdateEthernet(tv, dtv, f, p->ethh, true);
+        FlowUpdateEthernet(tv, dtv, f, p, true);
         /* update flow's ttl fields if needed */
-        if (PKT_IS_IPV4(p)) {
-            FlowUpdateTtlTS(f, p, IPV4_GET_IPTTL(p));
-        } else if (PKT_IS_IPV6(p)) {
-            FlowUpdateTtlTS(f, p, IPV6_GET_HLIM(p));
+        if (PacketIsIPv4(p)) {
+            const IPV4Hdr *ip4h = PacketGetIPv4(p);
+            FlowUpdateTtlTS(f, IPV4_GET_RAW_IPTTL(ip4h));
+        } else if (PacketIsIPv6(p)) {
+            const IPV6Hdr *ip6h = PacketGetIPv6(p);
+            FlowUpdateTtlTS(f, IPV6_GET_RAW_HLIM(ip6h));
         }
     } else {
         f->tosrcpktcnt++;
@@ -472,12 +457,14 @@ void FlowHandlePacketUpdate(Flow *f, Packet *p, ThreadVars *tv, DecodeThreadVars
             f->flags &= ~FLOW_PROTO_DETECT_TC_DONE;
             p->flags |= PKT_PROTO_DETECT_TC_DONE;
         }
-        FlowUpdateEthernet(tv, dtv, f, p->ethh, false);
+        FlowUpdateEthernet(tv, dtv, f, p, false);
         /* update flow's ttl fields if needed */
-        if (PKT_IS_IPV4(p)) {
-            FlowUpdateTtlTC(f, p, IPV4_GET_IPTTL(p));
-        } else if (PKT_IS_IPV6(p)) {
-            FlowUpdateTtlTC(f, p, IPV6_GET_HLIM(p));
+        if (PacketIsIPv4(p)) {
+            const IPV4Hdr *ip4h = PacketGetIPv4(p);
+            FlowUpdateTtlTC(f, IPV4_GET_RAW_IPTTL(ip4h));
+        } else if (PacketIsIPv6(p)) {
+            const IPV6Hdr *ip6h = PacketGetIPv6(p);
+            FlowUpdateTtlTC(f, IPV6_GET_RAW_HLIM(ip6h));
         }
     }
 
@@ -661,7 +648,6 @@ void FlowInitConfig(bool quiet)
     SCLogConfig("flow size %u, memcap allows for %" PRIu64 " flows. Per hash row in perfect "
                 "conditions %" PRIu64,
             sz, flow_memcap_copy / sz, (flow_memcap_copy / sz) / flow_config.hash_size);
-    return;
 }
 
 void FlowReset(void)
@@ -718,7 +704,7 @@ void FlowShutdown(void)
     (void) SC_ATOMIC_SUB(flow_memuse, flow_config.hash_size * sizeof(FlowBucket));
     FlowQueueDestroy(&flow_recycle_q);
     FlowSparePoolDestroy();
-    return;
+    DEBUG_VALIDATE_BUG_ON(SC_ATOMIC_GET(flow_memuse) != 0);
 }
 
 /**
@@ -1023,7 +1009,7 @@ void FlowInitFlowProto(void)
     }
 
     /* validate and if needed update emergency timeout values */
-    for (int i = 0; i < FLOW_PROTO_MAX; i++) {
+    for (uint8_t i = 0; i < FLOW_PROTO_MAX; i++) {
         const FlowProtoTimeout *n = &flow_timeouts_normal[i];
         FlowProtoTimeout *e = &flow_timeouts_emerg[i];
 
@@ -1056,7 +1042,7 @@ void FlowInitFlowProto(void)
         }
     }
 
-    for (int i = 0; i < FLOW_PROTO_MAX; i++) {
+    for (uint8_t i = 0; i < FLOW_PROTO_MAX; i++) {
         FlowProtoTimeout *n = &flow_timeouts_normal[i];
         FlowProtoTimeout *e = &flow_timeouts_emerg[i];
         FlowProtoTimeout *d = &flow_timeouts_delta[i];
@@ -1088,8 +1074,6 @@ void FlowInitFlowProto(void)
         SCLogDebug("deltas: new: -%u est: -%u closed: -%u bypassed: -%u",
                 d->new_timeout, d->est_timeout, d->closed_timeout, d->bypassed_timeout);
     }
-
-    return;
 }
 
 /**

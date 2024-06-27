@@ -1,5 +1,5 @@
 EXTRA_DIST =	src derive \
-		.cargo/config.in \
+		.cargo/config.toml.in \
 		cbindgen.toml \
 		dist/rust-bindings.h \
 		vendor \
@@ -12,10 +12,6 @@ endif
 
 if RUST_BUILD_STD
 NIGHTLY_ARGS = -Z build-std
-endif
-
-if HAVE_LUA
-RUST_FEATURES +=	lua $(LUA_INT8)
 endif
 
 if HAVE_JA3
@@ -61,6 +57,9 @@ endif
 			$(RUST_SURICATA_LIBDIR)/${RUST_SURICATA_LIBNAME}; \
 	fi
 	$(MAKE) gen/rust-bindings.h
+	mkdir -p $(abs_top_builddir)/rust/gen
+	cp -a $(RUST_SURICATA_LIBDIR)/build/suricata-lua-sys-*/out/lua/*.h \
+		$(abs_top_builddir)/rust/gen/
 
 install-library:
 	$(MKDIR_P) "$(DESTDIR)$(libdir)"
@@ -70,16 +69,10 @@ uninstall-local:
 	rm -f "$(DESTDIR)$(libdir)/$(RUST_SURICATA_LIBNAME)"
 
 clean-local:
-	rm -rf target
-if HAVE_CBINDGEN
-	rm -rf gen dist
-endif
+	rm -rf target gen
 
 distclean-local:
-	rm -f Cargo.lock
-
-maintainer-clean-local:
-	rm -rf vendor gen
+	rm -rf vendor dist
 
 check:
 	cd $(abs_top_srcdir)/rust && \
@@ -92,7 +85,8 @@ vendor:
 
 if HAVE_CBINDGEN
 gen/rust-bindings.h: $(RUST_SURICATA_LIB)
-	cbindgen --config $(abs_top_srcdir)/rust/cbindgen.toml \
+	cd $(abs_top_srcdir)/rust && \
+		cbindgen --config $(abs_top_srcdir)/rust/cbindgen.toml \
 		--quiet --verify --output $(abs_top_builddir)/rust/gen/rust-bindings.h || true
 else
 gen/rust-bindings.h:

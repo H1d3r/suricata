@@ -86,7 +86,6 @@ pub mod detect;
 
 pub mod ja4;
 
-#[cfg(feature = "lua")]
 pub mod lua;
 
 pub mod dns;
@@ -109,6 +108,7 @@ pub mod mqtt;
 pub mod pgsql;
 pub mod telnet;
 pub mod websocket;
+pub mod enip;
 pub mod applayertemplate;
 pub mod rdp;
 pub mod x509;
@@ -123,3 +123,7 @@ pub mod lzma;
 pub mod util;
 pub mod ffi;
 pub mod feature;
+pub mod sdp;
+
+#[allow(unused_imports)]
+pub use suricata_lua_sys;

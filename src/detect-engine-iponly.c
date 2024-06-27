@@ -1049,15 +1049,15 @@ void IPOnlyMatchPacket(ThreadVars *tv, const DetectEngineCtx *de_ctx,
             if (bitarray & 0x01) {
                 const Signature *s = de_ctx->sig_array[io_ctx->sig_mapping[u * 8 + i]];
 
-                if ((s->proto.flags & DETECT_PROTO_IPV4) && !PKT_IS_IPV4(p)) {
+                if ((s->proto.flags & DETECT_PROTO_IPV4) && !PacketIsIPv4(p)) {
                     SCLogDebug("ip version didn't match");
                     continue;
                 }
-                if ((s->proto.flags & DETECT_PROTO_IPV6) && !PKT_IS_IPV6(p)) {
+                if ((s->proto.flags & DETECT_PROTO_IPV6) && !PacketIsIPv6(p)) {
                     SCLogDebug("ip version didn't match");
                     continue;
                 }
-                if (DetectProtoContainsProto(&s->proto, IP_GET_IPPROTO(p)) == 0) {
+                if (DetectProtoContainsProto(&s->proto, PacketGetIPProto(p)) == 0) {
                     SCLogDebug("proto didn't match");
                     continue;
                 }
@@ -2537,7 +2537,4 @@ void IPOnlyRegisterTests(void)
     UtRegisterTest("IPOnlyTestBug5168v1", IPOnlyTestBug5168v1);
     UtRegisterTest("IPOnlyTestBug5168v2", IPOnlyTestBug5168v2);
 #endif
-
-    return;
 }
-

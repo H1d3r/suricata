@@ -354,7 +354,6 @@ static void TCPProtoDetectCheckBailConditions(ThreadVars *tv,
 
 failure:
     DisableAppLayer(tv, f, p);
-    return;
 }
 
 static int TCPProtoDetectTriggerOpposingSide(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
@@ -390,7 +389,7 @@ extern enum ExceptionPolicy g_applayerparser_error_policy;
  */
 static int TCPProtoDetect(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
         AppLayerThreadCtx *app_tctx, Packet *p, Flow *f, TcpSession *ssn, TcpStream **stream,
-        uint8_t *data, uint32_t data_len, uint8_t flags, enum StreamUpdateDir dir)
+        uint8_t *data, uint32_t data_len, uint8_t flags, enum StreamUpdateDir app_update_dir)
 {
     AppProto *alproto;
     AppProto *alproto_otherdir;
@@ -556,7 +555,7 @@ static int TCPProtoDetect(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
         int r = AppLayerParserParse(tv, app_tctx->alp_tctx, f, f->alproto,
                 flags, data, data_len);
         PACKET_PROFILING_APP_END(app_tctx, f->alproto);
-        p->app_update_direction = (uint8_t)dir;
+        p->app_update_direction = (uint8_t)app_update_dir;
         if (r != 1) {
             StreamTcpUpdateAppLayerProgress(ssn, direction, data_len);
         }
@@ -644,7 +643,7 @@ static int TCPProtoDetect(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
                             f->alproto, flags,
                             data, data_len);
                     PACKET_PROFILING_APP_END(app_tctx, f->alproto);
-                    p->app_update_direction = (uint8_t)dir;
+                    p->app_update_direction = (uint8_t)app_update_dir;
                     if (r != 1) {
                         StreamTcpUpdateAppLayerProgress(ssn, direction, data_len);
                     }
@@ -707,7 +706,7 @@ detect_error:
  */
 int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx, Packet *p, Flow *f,
         TcpSession *ssn, TcpStream **stream, uint8_t *data, uint32_t data_len, uint8_t flags,
-        enum StreamUpdateDir dir)
+        enum StreamUpdateDir app_update_dir)
 {
     SCEnter();
 
@@ -753,7 +752,7 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx, Packet
         r = AppLayerParserParse(tv, app_tctx->alp_tctx, f, f->alproto,
                 flags, data, data_len);
         PACKET_PROFILING_APP_END(app_tctx, f->alproto);
-        p->app_update_direction = (uint8_t)dir;
+        p->app_update_direction = (uint8_t)app_update_dir;
         /* ignore parser result for gap */
         StreamTcpUpdateAppLayerProgress(ssn, direction, data_len);
         if (r < 0) {
@@ -772,8 +771,8 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx, Packet
     if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_START)) {
         DEBUG_VALIDATE_BUG_ON(FlowChangeProto(f));
         /* run protocol detection */
-        if (TCPProtoDetect(tv, ra_ctx, app_tctx, p, f, ssn, stream, data, data_len, flags, dir) !=
-                0) {
+        if (TCPProtoDetect(tv, ra_ctx, app_tctx, p, f, ssn, stream, data, data_len, flags,
+                    app_update_dir) != 0) {
             goto failure;
         }
     } else if (alproto != ALPROTO_UNKNOWN && FlowChangeProto(f)) {
@@ -785,8 +784,8 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx, Packet
         StreamTcpResetStreamFlagAppProtoDetectionCompleted(&ssn->client);
         StreamTcpResetStreamFlagAppProtoDetectionCompleted(&ssn->server);
         /* rerun protocol detection */
-        int rd =
-                TCPProtoDetect(tv, ra_ctx, app_tctx, p, f, ssn, stream, data, data_len, flags, dir);
+        int rd = TCPProtoDetect(
+                tv, ra_ctx, app_tctx, p, f, ssn, stream, data, data_len, flags, app_update_dir);
         if (f->alproto == ALPROTO_UNKNOWN) {
             DEBUG_VALIDATE_BUG_ON(alstate_orig != f->alstate);
             // not enough data, revert AppLayerProtoDetectReset to rerun detection
@@ -839,7 +838,7 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx, Packet
             r = AppLayerParserParse(tv, app_tctx->alp_tctx, f, f->alproto,
                                     flags, data, data_len);
             PACKET_PROFILING_APP_END(app_tctx, f->alproto);
-            p->app_update_direction = (uint8_t)dir;
+            p->app_update_direction = (uint8_t)app_update_dir;
             if (r != 1) {
                 StreamTcpUpdateAppLayerProgress(ssn, direction, data_len);
                 if (r < 0) {
@@ -1056,7 +1055,7 @@ int AppLayerDeSetup(void)
     SCReturnInt(0);
 }
 
-AppLayerThreadCtx *AppLayerGetCtxThread(ThreadVars *tv)
+AppLayerThreadCtx *AppLayerGetCtxThread(void)
 {
     SCEnter();
 
@@ -1336,7 +1335,7 @@ void AppLayerDeSetupCounters(void)
     f.flags = FLOW_IPV4;                                                                           \
     f.proto = IPPROTO_TCP;                                                                         \
     p->flow = &f;                                                                                  \
-    p->tcph = &tcph;                                                                               \
+    PacketSetTCP(p, (uint8_t *)&tcph);                                                             \
                                                                                                    \
     StreamTcpInitConfig(true);                                                                     \
     IPPairInitConfig(true);                                                                        \
@@ -1364,8 +1363,8 @@ void AppLayerDeSetupCounters(void)
     FAIL_IF(ssn->data_first_seen_dir != 0);                                                        \
                                                                                                    \
     /* handshake */                                                                                \
-    p->tcph->th_ack = htonl(1);                                                                    \
-    p->tcph->th_flags = TH_SYN | TH_ACK;                                                           \
+    tcph.th_ack = htonl(1);                                                                        \
+    tcph.th_flags = TH_SYN | TH_ACK;                                                               \
     p->flowflags = FLOW_PKT_TOCLIENT;                                                              \
     p->payload_len = 0;                                                                            \
     p->payload = NULL;                                                                             \
@@ -1383,9 +1382,9 @@ void AppLayerDeSetupCounters(void)
     FAIL_IF(ssn->data_first_seen_dir != 0);                                                        \
                                                                                                    \
     /* handshake */                                                                                \
-    p->tcph->th_ack = htonl(1);                                                                    \
-    p->tcph->th_seq = htonl(1);                                                                    \
-    p->tcph->th_flags = TH_ACK;                                                                    \
+    tcph.th_ack = htonl(1);                                                                        \
+    tcph.th_seq = htonl(1);                                                                        \
+    tcph.th_flags = TH_ACK;                                                                        \
     p->flowflags = FLOW_PKT_TOSERVER;                                                              \
     p->payload_len = 0;                                                                            \
     p->payload = NULL;                                                                             \
@@ -1429,9 +1428,9 @@ static int AppLayerTest01(void)
         0x63, 0x68, 0x2f, 0x32, 0x2e, 0x33, 0x0d, 0x0a,
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20,
         0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request);
     p->payload = request;
@@ -1491,9 +1490,9 @@ static int AppLayerTest01(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -1511,9 +1510,9 @@ static int AppLayerTest01(void)
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -1543,9 +1542,9 @@ static int AppLayerTest02(void)
 
     /* partial request */
     uint8_t request1[] = { 0x47, 0x45, };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request1);
     p->payload = request1;
@@ -1563,9 +1562,9 @@ static int AppLayerTest02(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response ack against partial request */
-    p->tcph->th_ack = htonl(3);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(3);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = 0;
     p->payload = NULL;
@@ -1595,9 +1594,9 @@ static int AppLayerTest02(void)
         0x63, 0x68, 0x2f, 0x32, 0x2e, 0x33, 0x0d, 0x0a,
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20,
         0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(3);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(3);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request2);
     p->payload = request2;
@@ -1657,9 +1656,9 @@ static int AppLayerTest02(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -1677,9 +1676,9 @@ static int AppLayerTest02(void)
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -1720,9 +1719,9 @@ static int AppLayerTest03(void)
         0x63, 0x68, 0x2f, 0x32, 0x2e, 0x33, 0x0d, 0x0a,
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20,
         0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request);
     p->payload = request;
@@ -1782,9 +1781,9 @@ static int AppLayerTest03(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -1802,9 +1801,9 @@ static int AppLayerTest03(void)
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -1846,9 +1845,9 @@ static int AppLayerTest04(void)
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20,
         0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
     PrintRawDataFp(stdout, request, sizeof(request));
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request);
     p->payload = request;
@@ -1868,9 +1867,9 @@ static int AppLayerTest04(void)
     /* partial response */
     uint8_t response1[] = { 0x58, 0x54, 0x54, 0x50, };
     PrintRawDataFp(stdout, response1, sizeof(response1));
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response1);
     p->payload = response1;
@@ -1888,9 +1887,9 @@ static int AppLayerTest04(void)
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);  // first data sent to applayer
 
     /* partial response ack */
-    p->tcph->th_ack = htonl(5);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(5);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -1951,9 +1950,9 @@ static int AppLayerTest04(void)
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
     PrintRawDataFp(stdout, response2, sizeof(response2));
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(5);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(5);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response2);
     p->payload = response2;
@@ -1971,9 +1970,9 @@ static int AppLayerTest04(void)
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);  // first data sent to applayer
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2015,9 +2014,9 @@ static int AppLayerTest05(void)
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20,
         0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
     PrintRawDataFp(stdout, request, sizeof(request));
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request);
     p->payload = request;
@@ -2078,9 +2077,9 @@ static int AppLayerTest05(void)
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
     PrintRawDataFp(stdout, response, sizeof(response));
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -2098,9 +2097,9 @@ static int AppLayerTest05(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2171,9 +2170,9 @@ static int AppLayerTest06(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -2203,9 +2202,9 @@ static int AppLayerTest06(void)
         0x63, 0x68, 0x2f, 0x32, 0x2e, 0x33, 0x0d, 0x0a,
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20,
         0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request);
     p->payload = request;
@@ -2222,9 +2221,9 @@ static int AppLayerTest06(void)
     FAIL_IF(FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT));
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);
 
-    p->tcph->th_ack = htonl(1 + sizeof(request));
-    p->tcph->th_seq = htonl(328);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1 + sizeof(request));
+    tcph.th_seq = htonl(328);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2265,9 +2264,9 @@ static int AppLayerTest07(void)
         0x63, 0x68, 0x2f, 0x32, 0x2e, 0x33, 0x0d, 0x0a,
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20,
         0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request);
     p->payload = request;
@@ -2307,9 +2306,9 @@ static int AppLayerTest07(void)
         0x0a, 0x3c, 0x68, 0x74, 0x6d, 0x6c, 0x3e, 0x3c, 0x62, 0x6f, 0x64, 0x79, 0x3e, 0x3c, 0x68,
         0x31, 0x3e, 0x49, 0x74, 0x20, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e, 0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -2327,9 +2326,9 @@ static int AppLayerTest07(void)
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2364,9 +2363,9 @@ static int AppLayerTest08(void)
         0x0a, 0x55, 0x73, 0x65, 0x72, 0x2d, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x3a, 0x20, 0x41, 0x70,
         0x61, 0x63, 0x68, 0x65, 0x42, 0x65, 0x6e, 0x63, 0x68, 0x2f, 0x32, 0x2e, 0x33, 0x0d, 0x0a,
         0x41, 0x63, 0x63, 0x65, 0x70, 0x74, 0x3a, 0x20, 0x2a, 0x2f, 0x2a, 0x0d, 0x0a, 0x0d, 0x0a };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request);
     p->payload = request;
@@ -2426,9 +2425,9 @@ static int AppLayerTest08(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(88);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(88);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -2446,9 +2445,9 @@ static int AppLayerTest08(void)
     FAIL_IF(ssn->data_first_seen_dir != APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(88);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(88);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2481,9 +2480,9 @@ static int AppLayerTest09(void)
     /* full request */
     uint8_t request1[] = {
         0x47, 0x47, 0x49, 0x20, 0x2f, 0x69, 0x6e, 0x64 };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request1);
     p->payload = request1;
@@ -2501,9 +2500,9 @@ static int AppLayerTest09(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response - request ack */
-    p->tcph->th_ack = htonl(9);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(9);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2523,9 +2522,9 @@ static int AppLayerTest09(void)
     /* full request */
     uint8_t request2[] = {
         0x44, 0x44, 0x45, 0x20, 0x2f, 0x69, 0x6e, 0x64, 0xff };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(9);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(9);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request2);
     p->payload = request2;
@@ -2585,9 +2584,9 @@ static int AppLayerTest09(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(18);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(18);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -2605,9 +2604,9 @@ static int AppLayerTest09(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(18);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(18);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2640,9 +2639,9 @@ static int AppLayerTest10(void)
     uint8_t request1[] = {
         0x47, 0x47, 0x49, 0x20, 0x2f, 0x69, 0x6e, 0x64,
         0x47, 0x47, 0x49, 0x20, 0x2f, 0x69, 0x6e, 0x64, 0xff };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request1);
     p->payload = request1;
@@ -2660,9 +2659,9 @@ static int AppLayerTest10(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response - request ack */
-    p->tcph->th_ack = htonl(18);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(18);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2722,9 +2721,9 @@ static int AppLayerTest10(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(18);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(18);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response);
     p->payload = response;
@@ -2742,9 +2741,9 @@ static int AppLayerTest10(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response ack */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(18);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(18);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2778,9 +2777,9 @@ static int AppLayerTest11(void)
     uint8_t request1[] = {
         0x47, 0x47, 0x49, 0x20, 0x2f, 0x69, 0x6e, 0x64,
         0x47, 0x47, 0x49, 0x20, 0x2f, 0x69, 0x6e, 0x64, 0xff };
-    p->tcph->th_ack = htonl(1);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(1);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = sizeof(request1);
     p->payload = request1;
@@ -2798,9 +2797,9 @@ static int AppLayerTest11(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response - request ack */
-    p->tcph->th_ack = htonl(18);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(18);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2820,9 +2819,9 @@ static int AppLayerTest11(void)
     /* full response - request ack */
     uint8_t response1[] = {
         0x55, 0x74, 0x54, 0x50, };
-    p->tcph->th_ack = htonl(18);
-    p->tcph->th_seq = htonl(1);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(18);
+    tcph.th_seq = htonl(1);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response1);
     p->payload = response1;
@@ -2840,9 +2839,9 @@ static int AppLayerTest11(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response ack from request */
-    p->tcph->th_ack = htonl(5);
-    p->tcph->th_seq = htonl(18);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(5);
+    tcph.th_seq = htonl(18);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;
@@ -2901,9 +2900,9 @@ static int AppLayerTest11(void)
         0x72, 0x6b, 0x73, 0x21, 0x3c, 0x2f, 0x68, 0x31,
         0x3e, 0x3c, 0x2f, 0x62, 0x6f, 0x64, 0x79, 0x3e,
         0x3c, 0x2f, 0x68, 0x74, 0x6d, 0x6c, 0x3e };
-    p->tcph->th_ack = htonl(18);
-    p->tcph->th_seq = htonl(5);
-    p->tcph->th_flags = TH_PUSH | TH_ACK;
+    tcph.th_ack = htonl(18);
+    tcph.th_seq = htonl(5);
+    tcph.th_flags = TH_PUSH | TH_ACK;
     p->flowflags = FLOW_PKT_TOCLIENT;
     p->payload_len = sizeof(response2);
     p->payload = response2;
@@ -2921,9 +2920,9 @@ static int AppLayerTest11(void)
     FAIL_IF(ssn->data_first_seen_dir != STREAM_TOSERVER);
 
     /* response ack from request */
-    p->tcph->th_ack = htonl(328);
-    p->tcph->th_seq = htonl(18);
-    p->tcph->th_flags = TH_ACK;
+    tcph.th_ack = htonl(328);
+    tcph.th_seq = htonl(18);
+    tcph.th_flags = TH_ACK;
     p->flowflags = FLOW_PKT_TOSERVER;
     p->payload_len = 0;
     p->payload = NULL;

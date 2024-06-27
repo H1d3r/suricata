@@ -65,10 +65,7 @@ void DetectTcphdrRegister(void)
 
     DetectPktMpmRegister("tcp.hdr", 2, PrefilterGenericMpmPktRegister, GetData);
 
-    DetectPktInspectEngineRegister("tcp.hdr", GetData,
-            DetectEngineInspectPktBufferGeneric);
-
-    return;
+    DetectPktInspectEngineRegister("tcp.hdr", GetData, DetectEngineInspectPktBufferGeneric);
 }
 
 /**
@@ -101,23 +98,22 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
 
     InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
-        if (p->tcph == NULL) {
+        if (!PacketIsTCP(p)) {
             // may happen when DecodeTCPPacket fails
             // for instance with invalid header length
             return NULL;
         }
-        uint32_t hlen = TCP_GET_HLEN(p);
-        if (((uint8_t *)p->tcph + (ptrdiff_t)hlen) >
-                ((uint8_t *)GET_PKT_DATA(p) + (ptrdiff_t)GET_PKT_LEN(p)))
-        {
-            SCLogDebug("data out of range: %p > %p",
-                    ((uint8_t *)p->tcph + (ptrdiff_t)hlen),
+        const TCPHdr *tcph = PacketGetTCP(p);
+        const uint32_t hlen = TCP_GET_RAW_HLEN(tcph);
+        if (((uint8_t *)tcph + (ptrdiff_t)hlen) >
+                ((uint8_t *)GET_PKT_DATA(p) + (ptrdiff_t)GET_PKT_LEN(p))) {
+            SCLogDebug("data out of range: %p > %p", ((uint8_t *)tcph + (ptrdiff_t)hlen),
                     ((uint8_t *)GET_PKT_DATA(p) + (ptrdiff_t)GET_PKT_LEN(p)));
             return NULL;
         }
 
         const uint32_t data_len = hlen;
-        const uint8_t *data = (const uint8_t *)p->tcph;
+        const uint8_t *data = (const uint8_t *)tcph;
 
         InspectionBufferSetup(det_ctx, list_id, buffer, data, data_len);
         InspectionBufferApplyTransforms(buffer, transforms);

@@ -29,7 +29,6 @@
  * AF_XDP socket runmode
  *
  */
-#define PCAP_DONT_INCLUDE_PCAP_BPF_H 1
 #define SC_PCAP_DONT_INCLUDE_PCAP_H  1
 #include "suricata-common.h"
 #include "tm-threads.h"
@@ -77,8 +76,6 @@ void RunModeIdsAFXDPRegister(void)
             "Workers af-xdp mode, each thread does all"
             " tasks from acquisition to logging",
             RunModeIdsAFXDPWorkers, NULL);
-
-    return;
 }
 
 #ifdef HAVE_AF_XDP

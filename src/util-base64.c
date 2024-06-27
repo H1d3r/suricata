@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2024 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -24,6 +24,7 @@
 
 #include "util-base64.h"
 #include "util-debug.h"
+#include "util-validate.h"
 #include "util-unittest.h"
 /* Constants */
 #define BASE64_TABLE_MAX  122
@@ -94,6 +95,172 @@ static inline void DecodeBase64Block(uint8_t ascii[ASCII_BLOCK], uint8_t b64[B64
 }
 
 /**
+ * \brief Decode a base64 encoded string as per RFC 2045.
+ *        RFC 2045 states that any characters that do not fall under the Base64
+ *        alphabet must be skipped by the decoding software.
+ *        Following are some important considerations:
+ *        1. This Decoding algorithm is used by MIME parser currently.
+ *        2. The number of decoded bytes are constrained by the destination buffer size.
+ *        3. The leftover bytes are not handled by the decoder but the caller.
+ *
+ * \param dest destination buffer
+ * \param dest_size destination buffer size
+ * \param src base64 encoded string
+ * \param len length of the base64 encoded string
+ * \param consumed_bytes number of bytes successfully consumed by the decoder
+ * \param decoded_bytes number of bytes successfully decoded by the decoder
+ *
+ * \return Base64Ecode BASE64_ECODE_OK if all went well
+ *                     BASE64_ECODE_BUF if destination buffer got full before all could be decoded
+ */
+static inline Base64Ecode DecodeBase64RFC2045(uint8_t *dest, uint32_t dest_size, const uint8_t *src,
+        uint32_t len, uint32_t *consumed_bytes, uint32_t *decoded_bytes)
+{
+    int val;
+    uint32_t padding = 0, bbidx = 0, non_b64_chars = 0;
+    uint8_t *dptr = dest;
+    uint8_t b64[B64_BLOCK] = { 0, 0, 0, 0 };
+
+    for (uint32_t i = 0; i < len; i++) {
+        val = GetBase64Value(src[i]);
+        if (val < 0) {
+            if (src[i] != '=') {
+                non_b64_chars++;
+                continue;
+            } else {
+                padding++;
+            }
+        }
+
+        /* For each alpha-numeric letter in the source array, find the numeric value */
+        b64[bbidx++] = val > 0 ? (uint8_t)val : 0;
+
+        /* Decode every 4 base64 bytes into 3 ascii bytes */
+        if (bbidx == B64_BLOCK) {
+            /* For every 4 bytes, add 3 bytes but deduct the '=' padded blocks */
+            uint32_t numDecoded_blk = ASCII_BLOCK - (padding < B64_BLOCK ? padding : ASCII_BLOCK);
+            if (dest_size - *decoded_bytes < ASCII_BLOCK)
+                return BASE64_ECODE_BUF;
+            /* Decode base-64 block into ascii block and move pointer */
+            DecodeBase64Block(dptr, b64);
+            dptr += numDecoded_blk;
+            *decoded_bytes += numDecoded_blk;
+            /* Reset base-64 block and index */
+            bbidx = 0;
+            padding = 0;
+            *consumed_bytes += B64_BLOCK + non_b64_chars;
+            non_b64_chars = 0;
+            memset(&b64, 0, sizeof(b64));
+        }
+    }
+
+    DEBUG_VALIDATE_BUG_ON(*consumed_bytes > len);
+    DEBUG_VALIDATE_BUG_ON(bbidx == B64_BLOCK);
+    /* Any leftover bytes must be handled by the caller */
+    return BASE64_ECODE_OK;
+}
+
+/**
+ * \brief Decode a base64 encoded string as per RFC 4648.
+ *        RFC 4648 states that if a character is encountered that does not fall under
+ *        the Base64 alphabet, the decoding software should stop processing the string further.
+ *        Following are some important considerations:
+ *        1. This Decoding algorithm is used by base64_decode keyword currently.
+ *        2. This Decoding algorithm in strict mode is used by datasets currently.
+ *        3. The number of decoded bytes are constrained by the destination buffer size.
+ *        4. The leftover bytes are handled by the decoder.
+ *
+ * \param dest destination buffer
+ * \param dest_size destination buffer size
+ * \param src base64 encoded string
+ * \param len length of the base64 encoded string
+ * \param consumed_bytes number of bytes successfully consumed by the decoder
+ * \param decoded_bytes number of bytes successfully decoded by the decoder
+ * \param strict whether an invalid base64 encoding should be strictly rejected
+ *
+ * \return Base64Ecode BASE64_ECODE_OK if all went well
+ *                     BASE64_ECODE_BUF if destination buffer got full before all could be decoded
+ *                     BASE64_ECODE_ERR if an invalid char was found in strict mode or nothing was
+ * decoded
+ */
+static inline Base64Ecode DecodeBase64RFC4648(uint8_t *dest, uint32_t dest_size, const uint8_t *src,
+        uint32_t len, uint32_t *consumed_bytes, uint32_t *decoded_bytes, bool strict)
+{
+    int val;
+    uint32_t padding = 0, bbidx = 0;
+    uint8_t *dptr = dest;
+    uint8_t b64[B64_BLOCK] = { 0, 0, 0, 0 };
+
+    for (uint32_t i = 0; i < len; i++) {
+        val = GetBase64Value(src[i]);
+        if (val < 0) {
+            if (src[i] != '=') {
+                if (strict) {
+                    *decoded_bytes = 0;
+                    return BASE64_ECODE_ERR;
+                }
+                break;
+            }
+            padding++;
+        }
+        /* For each alpha-numeric letter in the source array, find the numeric value */
+        b64[bbidx++] = (val > 0 ? (uint8_t)val : 0);
+
+        /* Decode every 4 base64 bytes into 3 ascii bytes */
+        if (bbidx == B64_BLOCK) {
+            /* For every 4 bytes, add 3 bytes but deduct the '=' padded blocks */
+            uint32_t numDecoded_blk = ASCII_BLOCK - (padding < B64_BLOCK ? padding : ASCII_BLOCK);
+            if (dest_size - *decoded_bytes < ASCII_BLOCK)
+                return BASE64_ECODE_BUF;
+
+            /* Decode base-64 block into ascii block and move pointer */
+            DecodeBase64Block(dptr, b64);
+            dptr += numDecoded_blk;
+            *decoded_bytes += numDecoded_blk;
+            /* Reset base-64 block and index */
+            bbidx = 0;
+            padding = 0;
+            *consumed_bytes += B64_BLOCK;
+            memset(&b64, 0, sizeof(b64));
+        }
+    }
+
+    DEBUG_VALIDATE_BUG_ON(bbidx == B64_BLOCK);
+
+    /* Handle any leftover bytes by adding padding to them as long as they do not
+     * violate the destination buffer size */
+    if (bbidx > 0) {
+        /*
+         * --------------------
+         * | bbidx  | padding |
+         * --------------------
+         * |   1    |    2    |
+         * |   2    |    2    |
+         * |   3    |    1    |
+         * --------------------
+         * Note: Padding for 1 byte is set to 2 to have at least one
+         * decoded byte while calculating numDecoded_blk
+         * This does not affect the decoding as the b64 array is already
+         * populated with all padding bytes unless overwritten.
+         * */
+        padding = bbidx > 1 ? B64_BLOCK - bbidx : 2;
+        uint32_t numDecoded_blk = ASCII_BLOCK - padding;
+        if (dest_size - *decoded_bytes < ASCII_BLOCK)
+            return BASE64_ECODE_BUF;
+        /* Decode base-64 block into ascii block and move pointer */
+        DecodeBase64Block(dptr, b64);
+        *decoded_bytes += numDecoded_blk;
+        /* Consumed bytes should not have the padding bytes added by us */
+        *consumed_bytes += bbidx;
+    }
+    if (*decoded_bytes == 0)
+        return BASE64_ECODE_ERR;
+
+    DEBUG_VALIDATE_BUG_ON(*consumed_bytes > len);
+    return BASE64_ECODE_OK;
+}
+
+/**
  * \brief Decodes a base64-encoded string buffer into an ascii-encoded byte buffer
  *
  * \param dest The destination byte buffer
@@ -107,106 +274,26 @@ static inline void DecodeBase64Block(uint8_t ascii[ASCII_BLOCK], uint8_t b64[B64
  * \return Error code indicating success or failures with parsing
  */
 Base64Ecode DecodeBase64(uint8_t *dest, uint32_t dest_size, const uint8_t *src, uint32_t len,
-        uint32_t *consumed_bytes, uint32_t *decoded_bytes, Base64Mode mode)
+        uint32_t *consumed_bytes, uint32_t *decoded_bytes, DetectBase64Mode mode)
 {
-    int val;
-    uint32_t padding = 0, bbidx = 0, sp = 0, leading_sp = 0;
-    uint8_t *dptr = dest;
-    uint8_t b64[B64_BLOCK] = { 0,0,0,0 };
-    bool valid = true;
-    Base64Ecode ecode = BASE64_ECODE_OK;
     *decoded_bytes = 0;
-
-    /* Traverse through each alpha-numeric letter in the source array */
-    for (uint32_t i = 0; i < len; i++) {
-        /* Get decimal representation */
-        val = GetBase64Value(src[i]);
-        if (val < 0) {
-            if (mode == BASE64_MODE_RFC2045 && src[i] != '=') {
-                if (bbidx == 0) {
-                    /* Special case where last block of data has a leading space or invalid char */
-                    leading_sp++;
-                }
-                sp++;
-                continue;
-            }
-            /* Invalid character found, so decoding fails */
-            if (src[i] != '=') {
-                valid = false;
-                ecode = BASE64_ECODE_ERR;
-                if (mode == BASE64_MODE_STRICT) {
-                    *decoded_bytes = 0;
-                }
-                break;
-            }
-            padding++;
-        }
-
-        /* For each alpha-numeric letter in the source array, find the numeric
-         * value */
-        b64[bbidx++] = (val > 0 ? (uint8_t)val : 0);
-
-        /* Decode every 4 base64 bytes into 3 ascii bytes */
-        if (bbidx == B64_BLOCK) {
-
-            /* For every 4 bytes, add 3 bytes but deduct the '=' padded blocks */
-            uint32_t numDecoded_blk = ASCII_BLOCK - (padding < B64_BLOCK ? padding : ASCII_BLOCK);
-            if (dest_size < *decoded_bytes + numDecoded_blk) {
-                SCLogDebug("Destination buffer full");
-                ecode = BASE64_ECODE_BUF;
-                break;
-            }
-            if (dest_size - *decoded_bytes < ASCII_BLOCK)
-                return BASE64_ECODE_BUF;
-
-            /* Decode base-64 block into ascii block and move pointer */
-            DecodeBase64Block(dptr, b64);
-            dptr += numDecoded_blk;
-            *decoded_bytes += numDecoded_blk;
-            /* Reset base-64 block and index */
-            bbidx = 0;
-            padding = 0;
-            *consumed_bytes += B64_BLOCK + sp;
-            sp = 0;
-            leading_sp = 0;
-            memset(&b64, 0, sizeof(b64));
-        }
+    Base64Ecode ret = BASE64_ECODE_OK;
+    switch (mode) {
+        case Base64ModeRFC4648:
+            ret = DecodeBase64RFC4648(
+                    dest, dest_size, src, len, consumed_bytes, decoded_bytes, false);
+            break;
+        case Base64ModeRFC2045:
+            ret = DecodeBase64RFC2045(dest, dest_size, src, len, consumed_bytes, decoded_bytes);
+            break;
+        case Base64ModeStrict:
+            ret = DecodeBase64RFC4648(
+                    dest, dest_size, src, len, consumed_bytes, decoded_bytes, true);
+            break;
+        default:
+            return BASE64_ECODE_ERR;
     }
-
-    if (bbidx > 0 && bbidx < 4 && ((!valid && mode == BASE64_MODE_RFC4648))) {
-        /* Decoded bytes for 1 or 2 base64 encoded bytes is 1 */
-        padding = bbidx > 1 ? B64_BLOCK - bbidx : 2;
-        uint32_t numDecoded_blk = ASCII_BLOCK - (padding < B64_BLOCK ? padding : ASCII_BLOCK);
-        if (dest_size < *decoded_bytes + numDecoded_blk) {
-            SCLogDebug("Destination buffer full");
-            ecode = BASE64_ECODE_BUF;
-            return ecode;
-        }
-        /* if the destination size is not at least 3 Bytes long, it'll give a dynamic
-         * buffer overflow while decoding, so, return and let the caller take care of the
-         * remaining bytes to be decoded which should always be < 4 at this stage */
-        if (dest_size - *decoded_bytes < ASCII_BLOCK)
-            return BASE64_ECODE_BUF;
-        *decoded_bytes += numDecoded_blk;
-        DecodeBase64Block(dptr, b64);
-        *consumed_bytes += bbidx;
-    }
-
-    /* Finish remaining b64 bytes by padding */
-    if (valid && bbidx > 0 && (mode != BASE64_MODE_RFC2045)) {
-        /* Decode remaining */
-        if (dest_size - *decoded_bytes < ASCII_BLOCK)
-            return BASE64_ECODE_BUF;
-        *decoded_bytes += ASCII_BLOCK - (B64_BLOCK - bbidx);
-        DecodeBase64Block(dptr, b64);
-    }
-
-    if (*decoded_bytes == 0) {
-        SCLogDebug("base64 decoding failed");
-    }
-
-    *consumed_bytes += leading_sp;
-    return ecode;
+    return ret;
 }
 
 #ifdef UNITTESTS
@@ -216,7 +303,7 @@ Base64Ecode DecodeBase64(uint8_t *dest, uint32_t dest_size, const uint8_t *src, 
         uint32_t consumed_bytes = 0, num_decoded = 0;                                              \
         uint8_t dst[dest_size];                                                                    \
         Base64Ecode code = DecodeBase64(dst, dest_size, (const uint8_t *)src, strlen(src),         \
-                &consumed_bytes, &num_decoded, BASE64_MODE_RFC2045);                               \
+                &consumed_bytes, &num_decoded, Base64ModeRFC2045);                                 \
         FAIL_IF(code != ecode);                                                                    \
         FAIL_IF(memcmp(dst, fin_str, strlen(fin_str)) != 0);                                       \
         FAIL_IF(num_decoded != exp_decoded);                                                       \
@@ -228,7 +315,7 @@ Base64Ecode DecodeBase64(uint8_t *dest, uint32_t dest_size, const uint8_t *src, 
         uint32_t consumed_bytes = 0, num_decoded = 0;                                              \
         uint8_t dst[dest_size];                                                                    \
         Base64Ecode code = DecodeBase64(dst, dest_size, (const uint8_t *)src, strlen(src),         \
-                &consumed_bytes, &num_decoded, BASE64_MODE_RFC4648);                               \
+                &consumed_bytes, &num_decoded, Base64ModeRFC4648);                                 \
         FAIL_IF(code != ecode);                                                                    \
         FAIL_IF(memcmp(dst, fin_str, strlen(fin_str)) != 0);                                       \
         FAIL_IF(num_decoded != exp_decoded);                                                       \
@@ -242,7 +329,7 @@ static int B64DecodeCompleteString(void)
      * */
     const char *src = "SGVsbG8gV29ybGR6";
     const char *fin_str = "Hello Worldz";
-    TEST_RFC2045(src, fin_str, strlen(fin_str), strlen(fin_str), strlen(src), BASE64_ECODE_OK);
+    TEST_RFC2045(src, fin_str, 12, 12, 16, BASE64_ECODE_OK);
     PASS;
 }
 
@@ -253,7 +340,7 @@ static int B64DecodeInCompleteString(void)
      * */
     const char *src = "SGVsbG8gV29ybGR";
     const char *fin_str = "Hello Wor";
-    TEST_RFC2045(src, fin_str, strlen(fin_str), strlen(fin_str), strlen(src) - 3, BASE64_ECODE_OK);
+    TEST_RFC2045(src, fin_str, 9, 9, 12, BASE64_ECODE_OK);
     PASS;
 }
 
@@ -265,7 +352,7 @@ static int B64DecodeCompleteStringWSp(void)
 
     const char *src = "SGVs bG8 gV29y bGQ=";
     const char *fin_str = "Hello World";
-    TEST_RFC2045(src, fin_str, strlen(fin_str) + 3, strlen(fin_str), strlen(src), BASE64_ECODE_OK);
+    TEST_RFC2045(src, fin_str, 14, 11, 19, BASE64_ECODE_OK);
     PASS;
 }
 
@@ -278,8 +365,7 @@ static int B64DecodeInCompleteStringWSp(void)
 
     const char *src = "SGVs bG8 gV29y bGQ";
     const char *fin_str = "Hello Wor";
-    TEST_RFC2045(src, fin_str, strlen(fin_str) + 1 /* 12 B in dest_size */, strlen(fin_str),
-            strlen(src) - 3, BASE64_ECODE_OK);
+    TEST_RFC2045(src, fin_str, 9, 9, 14, BASE64_ECODE_OK);
     PASS;
 }
 
@@ -291,8 +377,7 @@ static int B64DecodeStringBiggerThanBuffer(void)
 
     const char *src = "SGVs bG8 gV29y bGQ=";
     const char *fin_str = "Hello Wor";
-    TEST_RFC2045(
-            src, fin_str, strlen(fin_str) + 1, strlen(fin_str), strlen(src) - 4, BASE64_ECODE_BUF);
+    TEST_RFC2045(src, fin_str, 10, 9, 14, BASE64_ECODE_BUF);
     PASS;
 }
 
@@ -301,8 +386,8 @@ static int B64DecodeStringEndingSpaces(void)
     const char *src = "0YPhA d H";
     uint32_t consumed_bytes = 0, num_decoded = 0;
     uint8_t dst[10];
-    Base64Ecode code = DecodeBase64(dst, sizeof(dst), (const uint8_t *)src, strlen(src),
-            &consumed_bytes, &num_decoded, BASE64_MODE_RFC2045);
+    Base64Ecode code = DecodeBase64(dst, sizeof(dst), (const uint8_t *)src, 9, &consumed_bytes,
+            &num_decoded, Base64ModeRFC2045);
     FAIL_IF(code != BASE64_ECODE_OK);
     FAIL_IF(num_decoded != 3);
     FAIL_IF(consumed_bytes != 4);
@@ -341,6 +426,9 @@ static int B64TestVectorsRFC2045(void)
     const char *src10 = "Y21Wd2IzSjBaVzFoYVd4bWNtRjFaRUJoZEc4dVoyOTJMbUYxOmpqcHh4b3Rhb2w%5";
     const char *fin_str10 = "cmVwb3J0ZW1haWxmcmF1ZEBhdG8uZ292LmF1:jjpxxotaol9";
 
+    const char *src11 = "Zm 9v Ym Fy        7fy";
+    const char *fin_str11 = "foobar";
+
     TEST_RFC2045(src1, fin_str1, ASCII_BLOCK * 2, strlen(fin_str1), strlen(src1), BASE64_ECODE_OK);
     TEST_RFC2045(src2, fin_str2, ASCII_BLOCK * 2, strlen(fin_str2), strlen(src2), BASE64_ECODE_OK);
     TEST_RFC2045(src3, fin_str3, ASCII_BLOCK * 2, strlen(fin_str3), strlen(src3), BASE64_ECODE_OK);
@@ -350,8 +438,8 @@ static int B64TestVectorsRFC2045(void)
     TEST_RFC2045(src7, fin_str7, ASCII_BLOCK * 2, strlen(fin_str7), strlen(src7), BASE64_ECODE_OK);
     TEST_RFC2045(src8, fin_str8, ASCII_BLOCK * 2, strlen(fin_str8), strlen(src8), BASE64_ECODE_OK);
     TEST_RFC2045(src9, fin_str9, ASCII_BLOCK * 2, strlen(fin_str9), strlen(src9), BASE64_ECODE_OK);
-    TEST_RFC2045(src10, fin_str10, strlen(fin_str10) + 2, strlen(fin_str10), strlen(src10),
-            BASE64_ECODE_OK);
+    TEST_RFC2045(src10, fin_str10, 50, 48, 65, BASE64_ECODE_OK);
+    TEST_RFC2045(src11, fin_str11, ASCII_BLOCK * 2, 6, 11, BASE64_ECODE_OK);
     PASS;
 }
 
@@ -387,17 +475,20 @@ static int B64TestVectorsRFC4648(void)
     const char *src10 = "Y21Wd2IzSjBaVzFoYVd4bWNtRjFaRUJoZEc4dVoyOTJMbUYxOmpqcHh4b3Rhb2w%3D";
     const char *fin_str10 = "cmVwb3J0ZW1haWxmcmF1ZEBhdG8uZ292LmF1:jjpxxotaol";
 
-    TEST_RFC4648(src1, fin_str1, ASCII_BLOCK * 2, strlen(fin_str1), strlen(src1), BASE64_ECODE_OK);
+    const char *src11 = "Zm9vYg==";
+    const char *fin_str11 = "foo";
+
+    TEST_RFC4648(src1, fin_str1, ASCII_BLOCK * 2, strlen(fin_str1), strlen(src1), BASE64_ECODE_ERR);
     TEST_RFC4648(src2, fin_str2, ASCII_BLOCK * 2, strlen(fin_str2), strlen(src2), BASE64_ECODE_OK);
     TEST_RFC4648(src3, fin_str3, ASCII_BLOCK * 2, strlen(fin_str3), strlen(src3), BASE64_ECODE_OK);
     TEST_RFC4648(src4, fin_str4, ASCII_BLOCK * 2, strlen(fin_str4), strlen(src4), BASE64_ECODE_OK);
     TEST_RFC4648(src5, fin_str5, ASCII_BLOCK * 2, strlen(fin_str5), strlen(src5), BASE64_ECODE_OK);
     TEST_RFC4648(src6, fin_str6, ASCII_BLOCK * 2, strlen(fin_str6), strlen(src6), BASE64_ECODE_OK);
     TEST_RFC4648(src7, fin_str7, ASCII_BLOCK * 2, strlen(fin_str7), strlen(src7), BASE64_ECODE_OK);
-    TEST_RFC4648(src8, fin_str8, ASCII_BLOCK * 2, 1 /* f */, 2 /* Zm */, BASE64_ECODE_ERR);
-    TEST_RFC4648(src9, fin_str9, ASCII_BLOCK * 2, 1 /* f */, 2 /* Zm */, BASE64_ECODE_ERR);
-    TEST_RFC4648(src10, fin_str10, strlen(fin_str10) + 1, strlen(fin_str10), strlen(src10) - 3,
-            BASE64_ECODE_ERR);
+    TEST_RFC4648(src8, fin_str8, ASCII_BLOCK * 2, 1 /* f */, 2 /* Zm */, BASE64_ECODE_OK);
+    TEST_RFC4648(src9, fin_str9, ASCII_BLOCK * 2, 1 /* f */, 2 /* Zm */, BASE64_ECODE_OK);
+    TEST_RFC4648(src10, fin_str10, 48, 47, 63, BASE64_ECODE_OK);
+    TEST_RFC4648(src11, fin_str11, 3, 3, 4, BASE64_ECODE_BUF);
     PASS;
 }
 

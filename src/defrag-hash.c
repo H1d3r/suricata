@@ -18,12 +18,14 @@
 #include "suricata-common.h"
 #include "conf.h"
 #include "defrag-hash.h"
-#include "defrag-queue.h"
+#include "defrag-stack.h"
 #include "defrag-config.h"
+#include "defrag-timeout.h"
 #include "util-random.h"
 #include "util-byte.h"
 #include "util-misc.h"
 #include "util-hash-lookup3.h"
+#include "util-validate.h"
 
 /** defrag tracker hash table */
 DefragTrackerHashRow *defragtracker_hash;
@@ -32,10 +34,11 @@ SC_ATOMIC_DECLARE(uint64_t,defrag_memuse);
 SC_ATOMIC_DECLARE(unsigned int,defragtracker_counter);
 SC_ATOMIC_DECLARE(unsigned int,defragtracker_prune_idx);
 
-static DefragTracker *DefragTrackerGetUsedDefragTracker(void);
+static DefragTracker *DefragTrackerGetUsedDefragTracker(
+        ThreadVars *tv, const DecodeThreadVars *dtv);
 
 /** queue with spare tracker */
-static DefragTrackerQueue defragtracker_spare_q;
+static DefragTrackerStack defragtracker_spare_q;
 
 /**
  *  \brief Update memcap value
@@ -127,14 +130,16 @@ static void DefragTrackerInit(DefragTracker *dt, Packet *p)
     COPY_ADDRESS(&p->src, &dt->src_addr);
     COPY_ADDRESS(&p->dst, &dt->dst_addr);
 
-    if (PKT_IS_IPV4(p)) {
-        dt->id = (int32_t)IPV4_GET_IPID(p);
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr *ip4h = PacketGetIPv4(p);
+        dt->id = (int32_t)IPV4_GET_RAW_IPID(ip4h);
         dt->af = AF_INET;
     } else {
+        DEBUG_VALIDATE_BUG_ON(!PacketIsIPv6(p));
         dt->id = (int32_t)IPV6_EXTHDR_GET_FH_ID(p);
         dt->af = AF_INET6;
     }
-    dt->proto = IP_GET_IPPROTO(p);
+    dt->proto = PacketGetIPProto(p);
     memcpy(&dt->vlan_id[0], &p->vlan_id[0], sizeof(dt->vlan_id));
     dt->policy = DefragGetOsPolicy(p);
     dt->host_timeout = DefragPolicyGetHostTimeout(p);
@@ -165,13 +170,12 @@ void DefragInitConfig(bool quiet)
 {
     SCLogDebug("initializing defrag engine...");
 
-    memset(&defrag_config,  0, sizeof(defrag_config));
-    //SC_ATOMIC_INIT(flow_flags);
+    memset(&defrag_config, 0, sizeof(defrag_config));
     SC_ATOMIC_INIT(defragtracker_counter);
     SC_ATOMIC_INIT(defrag_memuse);
     SC_ATOMIC_INIT(defragtracker_prune_idx);
     SC_ATOMIC_INIT(defrag_config.memcap);
-    DefragTrackerQueueInit(&defragtracker_spare_q);
+    DefragTrackerStackInit(&defragtracker_spare_q);
 
     /* set defaults */
     defrag_config.hash_rand   = (uint32_t)RandomGet();
@@ -285,14 +289,6 @@ void DefragInitConfig(bool quiet)
         SCLogConfig("defrag memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(defrag_memuse), SC_ATOMIC_GET(defrag_config.memcap));
     }
-
-    return;
-}
-
-/** \brief print some defrag stats
- *  \warning Not thread safe */
-static void DefragTrackerPrintStats (void)
-{
 }
 
 /** \brief shutdown the flow engine
@@ -300,9 +296,6 @@ static void DefragTrackerPrintStats (void)
 void DefragHashShutdown(void)
 {
     DefragTracker *dt;
-    uint32_t u;
-
-    DefragTrackerPrintStats();
 
     /* free spare queue */
     while((dt = DefragTrackerDequeue(&defragtracker_spare_q))) {
@@ -312,7 +305,7 @@ void DefragHashShutdown(void)
 
     /* clear and free the hash */
     if (defragtracker_hash != NULL) {
-        for (u = 0; u < defrag_config.hash_size; u++) {
+        for (uint32_t u = 0; u < defrag_config.hash_size; u++) {
             dt = defragtracker_hash[u].head;
             while (dt) {
                 DefragTracker *n = dt->hnext;
@@ -327,8 +320,7 @@ void DefragHashShutdown(void)
         defragtracker_hash = NULL;
     }
     (void) SC_ATOMIC_SUB(defrag_memuse, defrag_config.hash_size * sizeof(DefragTrackerHashRow));
-    DefragTrackerQueueDestroy(&defragtracker_spare_q);
-    return;
+    DefragTrackerStackDestroy(&defragtracker_spare_q);
 }
 
 /** \brief compare two raw ipv6 addrs
@@ -390,7 +382,8 @@ static inline uint32_t DefragHashGetKey(Packet *p)
 {
     uint32_t key;
 
-    if (p->ip4h != NULL) {
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr *ip4h = PacketGetIPv4(p);
         DefragHashKey4 dhk = { .pad[0] = 0 };
         if (p->src.addr_data32[0] > p->dst.addr_data32[0]) {
             dhk.src = p->src.addr_data32[0];
@@ -399,13 +392,13 @@ static inline uint32_t DefragHashGetKey(Packet *p)
             dhk.src = p->dst.addr_data32[0];
             dhk.dst = p->src.addr_data32[0];
         }
-        dhk.id = (uint32_t)IPV4_GET_IPID(p);
+        dhk.id = (uint32_t)IPV4_GET_RAW_IPID(ip4h);
         memcpy(&dhk.vlan_id[0], &p->vlan_id[0], sizeof(dhk.vlan_id));
 
         uint32_t hash =
                 hashword(dhk.u32, sizeof(dhk.u32) / sizeof(uint32_t), defrag_config.hash_rand);
         key = hash % defrag_config.hash_size;
-    } else if (p->ip6h != NULL) {
+    } else if (PacketIsIPv6(p)) {
         DefragHashKey6 dhk = { .pad[0] = 0 };
         if (DefragHashRawAddressIPv6GtU32(p->src.addr_data32, p->dst.addr_data32)) {
             dhk.src[0] = p->src.addr_data32[0];
@@ -432,9 +425,9 @@ static inline uint32_t DefragHashGetKey(Packet *p)
         uint32_t hash =
                 hashword(dhk.u32, sizeof(dhk.u32) / sizeof(uint32_t), defrag_config.hash_rand);
         key = hash % defrag_config.hash_size;
-    } else
+    } else {
         key = 0;
-
+    }
     return key;
 }
 
@@ -443,15 +436,16 @@ static inline uint32_t DefragHashGetKey(Packet *p)
 #define CMP_DEFRAGTRACKER(d1, d2, id)                                                              \
     (((CMP_ADDR(&(d1)->src_addr, &(d2)->src) && CMP_ADDR(&(d1)->dst_addr, &(d2)->dst)) ||          \
              (CMP_ADDR(&(d1)->src_addr, &(d2)->dst) && CMP_ADDR(&(d1)->dst_addr, &(d2)->src))) &&  \
-            (d1)->proto == IP_GET_IPPROTO(d2) && (d1)->id == (id) &&                               \
+            (d1)->proto == PacketGetIPProto(d2) && (d1)->id == (id) &&                             \
             (d1)->vlan_id[0] == (d2)->vlan_id[0] && (d1)->vlan_id[1] == (d2)->vlan_id[1] &&        \
             (d1)->vlan_id[2] == (d2)->vlan_id[2])
 
 static inline int DefragTrackerCompare(DefragTracker *t, Packet *p)
 {
     uint32_t id;
-    if (PKT_IS_IPV4(p)) {
-        id = (uint32_t)IPV4_GET_IPID(p);
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr *ip4h = PacketGetIPv4(p);
+        id = (uint32_t)IPV4_GET_RAW_IPID(ip4h);
     } else {
         id = IPV6_EXTHDR_GET_FH_ID(p);
     }
@@ -463,7 +457,7 @@ static void DefragExceptionPolicyStatsIncr(
         ThreadVars *tv, DecodeThreadVars *dtv, enum ExceptionPolicy policy)
 {
     uint16_t id = dtv->counter_defrag_memcap_eps.eps_id[policy];
-    if (likely(tv && id > 0)) {
+    if (likely(id > 0)) {
         StatsIncr(tv, id);
     }
 }
@@ -494,17 +488,7 @@ static DefragTracker *DefragTrackerGetNew(ThreadVars *tv, DecodeThreadVars *dtv,
     if (dt == NULL) {
         /* If we reached the max memcap, we get a used tracker */
         if (!(DEFRAG_CHECK_MEMCAP(sizeof(DefragTracker)))) {
-            /* declare state of emergency */
-            //if (!(SC_ATOMIC_GET(defragtracker_flags) & DEFRAG_EMERGENCY)) {
-            //    SC_ATOMIC_OR(defragtracker_flags, DEFRAG_EMERGENCY);
-
-                /* under high load, waking up the flow mgr each time leads
-                 * to high cpu usage. Flows are not timed out much faster if
-                 * we check a 1000 times a second. */
-            //    FlowWakeupFlowManagerThread();
-            //}
-
-            dt = DefragTrackerGetUsedDefragTracker();
+            dt = DefragTrackerGetUsedDefragTracker(tv, dtv);
             if (dt == NULL) {
                 ExceptionPolicyApply(p, defrag_config.memcap_policy, PKT_DROP_REASON_DEFRAG_MEMCAP);
                 DefragExceptionPolicyStatsIncr(tv, dtv, defrag_config.memcap_policy);
@@ -562,7 +546,6 @@ DefragTracker *DefragGetTrackerFromHash(ThreadVars *tv, DecodeThreadVars *dtv, P
 
         /* tracker is locked */
         hb->head = dt;
-        hb->tail = dt;
 
         /* got one, now lock, initialize and return */
         DefragTrackerInit(dt,p);
@@ -572,67 +555,64 @@ DefragTracker *DefragGetTrackerFromHash(ThreadVars *tv, DecodeThreadVars *dtv, P
     }
 
     /* ok, we have a tracker in the bucket. Let's find out if it is our tracker */
+    DefragTracker *prev_dt = NULL;
     dt = hb->head;
 
-    /* see if this is the tracker we are looking for */
-    if (dt->remove || DefragTrackerCompare(dt, p) == 0) {
-        DefragTracker *pdt = NULL; /* previous tracker */
+    do {
+        DefragTracker *next_dt = NULL;
 
-        while (dt) {
-            pdt = dt;
-            dt = dt->hnext;
-
-            if (dt == NULL) {
-                dt = pdt->hnext = DefragTrackerGetNew(tv, dtv, p);
-                if (dt == NULL) {
-                    DRLOCK_UNLOCK(hb);
-                    return NULL;
-                }
-                hb->tail = dt;
-
-                /* tracker is locked */
-
-                dt->hprev = pdt;
-
-                /* initialize and return */
-                DefragTrackerInit(dt,p);
-
-                DRLOCK_UNLOCK(hb);
-                return dt;
+        SCMutexLock(&dt->lock);
+        if (DefragTrackerTimedOut(dt, p->ts)) {
+            next_dt = dt->hnext;
+            dt->hnext = NULL;
+            if (prev_dt) {
+                prev_dt->hnext = next_dt;
+            } else {
+                hb->head = next_dt;
             }
+            DefragTrackerClearMemory(dt);
+            SCMutexUnlock(&dt->lock);
 
-            if (DefragTrackerCompare(dt, p) != 0) {
-                /* we found our tracker, lets put it on top of the
-                 * hash list -- this rewards active trackers */
-                if (dt->hnext) {
-                    dt->hnext->hprev = dt->hprev;
-                }
-                if (dt->hprev) {
-                    dt->hprev->hnext = dt->hnext;
-                }
-                if (dt == hb->tail) {
-                    hb->tail = dt->hprev;
-                }
-
-                dt->hnext = hb->head;
-                dt->hprev = NULL;
-                hb->head->hprev = dt;
-                hb->head = dt;
-
-                /* found our tracker, lock & return */
-                SCMutexLock(&dt->lock);
-                (void) DefragTrackerIncrUsecnt(dt);
-                DRLOCK_UNLOCK(hb);
-                return dt;
-            }
+            DefragTrackerMoveToSpare(dt);
+            StatsIncr(tv, dtv->counter_defrag_tracker_timeout);
+            goto tracker_removed;
+        } else if (!dt->remove && DefragTrackerCompare(dt, p)) {
+            /* found our tracker, keep locked & return */
+            (void)DefragTrackerIncrUsecnt(dt);
+            DRLOCK_UNLOCK(hb);
+            return dt;
         }
-    }
+        SCMutexUnlock(&dt->lock);
+        /* unless we removed 'dt', prev_dt needs to point to
+         * current 'dt' when adding a new tracker below. */
+        prev_dt = dt;
+        next_dt = dt->hnext;
 
-    /* lock & return */
-    SCMutexLock(&dt->lock);
-    (void) DefragTrackerIncrUsecnt(dt);
-    DRLOCK_UNLOCK(hb);
-    return dt;
+    tracker_removed:
+        if (next_dt == NULL) {
+            dt = DefragTrackerGetNew(tv, dtv, p);
+            if (dt == NULL) {
+                DRLOCK_UNLOCK(hb);
+                return NULL;
+            }
+            dt->hnext = hb->head;
+            hb->head = dt;
+
+            /* tracker is locked */
+
+            /* initialize and return */
+            DefragTrackerInit(dt, p);
+
+            DRLOCK_UNLOCK(hb);
+            return dt;
+        }
+
+        dt = next_dt;
+    } while (dt != NULL);
+
+    /* should be unreachable */
+    BUG_ON(1);
+    return NULL;
 }
 
 /** \brief look up a tracker in the hash
@@ -660,48 +640,25 @@ DefragTracker *DefragLookupTrackerFromHash (Packet *p)
     /* ok, we have a tracker in the bucket. Let's find out if it is our tracker */
     dt = hb->head;
 
-    /* see if this is the tracker we are looking for */
-    if (DefragTrackerCompare(dt, p) == 0) {
-        while (dt) {
-            dt = dt->hnext;
+    do {
+        if (!dt->remove && DefragTrackerCompare(dt, p)) {
+            /* found our tracker, lock & return */
+            SCMutexLock(&dt->lock);
+            (void)DefragTrackerIncrUsecnt(dt);
+            DRLOCK_UNLOCK(hb);
+            return dt;
 
-            if (dt == NULL) {
-                DRLOCK_UNLOCK(hb);
-                return dt;
-            }
-
-            if (DefragTrackerCompare(dt, p) != 0) {
-                /* we found our tracker, lets put it on top of the
-                 * hash list -- this rewards active tracker */
-                if (dt->hnext) {
-                    dt->hnext->hprev = dt->hprev;
-                }
-                if (dt->hprev) {
-                    dt->hprev->hnext = dt->hnext;
-                }
-                if (dt == hb->tail) {
-                    hb->tail = dt->hprev;
-                }
-
-                dt->hnext = hb->head;
-                dt->hprev = NULL;
-                hb->head->hprev = dt;
-                hb->head = dt;
-
-                /* found our tracker, lock & return */
-                SCMutexLock(&dt->lock);
-                (void) DefragTrackerIncrUsecnt(dt);
-                DRLOCK_UNLOCK(hb);
-                return dt;
-            }
+        } else if (dt->hnext == NULL) {
+            DRLOCK_UNLOCK(hb);
+            return NULL;
         }
-    }
 
-    /* lock & return */
-    SCMutexLock(&dt->lock);
-    (void) DefragTrackerIncrUsecnt(dt);
-    DRLOCK_UNLOCK(hb);
-    return dt;
+        dt = dt->hnext;
+    } while (dt != NULL);
+
+    /* should be unreachable */
+    BUG_ON(1);
+    return NULL;
 }
 
 /** \internal
@@ -715,7 +672,7 @@ DefragTracker *DefragLookupTrackerFromHash (Packet *p)
  *
  *  \retval dt tracker or NULL
  */
-static DefragTracker *DefragTrackerGetUsedDefragTracker(void)
+static DefragTracker *DefragTrackerGetUsedDefragTracker(ThreadVars *tv, const DecodeThreadVars *dtv)
 {
     uint32_t idx = SC_ATOMIC_GET(defragtracker_prune_idx) % defrag_config.hash_size;
     uint32_t cnt = defrag_config.hash_size;
@@ -729,7 +686,7 @@ static DefragTracker *DefragTrackerGetUsedDefragTracker(void)
         if (DRLOCK_TRYLOCK(hb) != 0)
             continue;
 
-        DefragTracker *dt = hb->tail;
+        DefragTracker *dt = hb->head;
         if (dt == NULL) {
             DRLOCK_UNLOCK(hb);
             continue;
@@ -748,23 +705,24 @@ static DefragTracker *DefragTrackerGetUsedDefragTracker(void)
             continue;
         }
 
+        /* only count "forced" reuse */
+        bool incr_reuse_cnt = !dt->remove;
+
         /* remove from the hash */
-        if (dt->hprev != NULL)
-            dt->hprev->hnext = dt->hnext;
-        if (dt->hnext != NULL)
-            dt->hnext->hprev = dt->hprev;
-        if (hb->head == dt)
-            hb->head = dt->hnext;
-        if (hb->tail == dt)
-            hb->tail = dt->hprev;
+        hb->head = dt->hnext;
 
         dt->hnext = NULL;
-        dt->hprev = NULL;
         DRLOCK_UNLOCK(hb);
 
         DefragTrackerClearMemory(dt);
 
         SCMutexUnlock(&dt->lock);
+
+        if (incr_reuse_cnt) {
+            StatsIncr(tv, dtv->counter_defrag_tracker_hard_reuse);
+        } else {
+            StatsIncr(tv, dtv->counter_defrag_tracker_soft_reuse);
+        }
 
         (void) SC_ATOMIC_ADD(defragtracker_prune_idx, (defrag_config.hash_size - cnt));
         return dt;
@@ -772,5 +730,3 @@ static DefragTracker *DefragTrackerGetUsedDefragTracker(void)
 
     return NULL;
 }
-
-

@@ -52,6 +52,16 @@ Major changes
   for the ``stats`` event.
 - Stats counters that are 0 can now be hidden from EVE logs. Default behavior
   still logs those (see :ref:`EVE Output - Stats <eve-json-output-stats>` for configuration setting).
+- SDP parser and logger have been introduced.
+  Due to SDP being encapsulated within other protocols, such as SIP, they cannot be directly enabled or disabled.
+  Instead, both the SDP parser and logger depend on being invoked by another parser (or logger).
+- ARP decoder and logger have been introduced.
+  Since ARP can be quite verbose and produce many events, the logger is disabled by default.
+- It is possible to see an increase of alerts, for the same rule-sets, if you
+  use many stream/payload rules, due to Suricata triggering TCP stream
+  reassembly earlier.
+- New transform ``from_base64`` that base64 decodes a buffer and passes the
+  decoded buffer. It's recommended that ``from_base64`` be used instead of ``base64_decode``
 
 Upgrading 6.0 to 7.0
 --------------------
@@ -66,6 +76,9 @@ Major changes
   <https://forum.suricata.io/t/my-traffic-gets-blocked-after-upgrading-to-suricata-7>`_.
 - New protocols enabled by default: bittorrent-dht, quic, http2.
 - The telnet protocol is also enabled by default, but only for the ``app-layer``.
+- Spaces are accepted in HTTP1 URIs instead of in the protocol version. That is:
+  `GET /a b HTTP/1.1` gets now URI as `/a b` and protocol as `HTTP/1.1` when
+  it used to be URI as `/a` and protocol as `b HTTP/1.1`
 
 Security changes
 ~~~~~~~~~~~~~~~~

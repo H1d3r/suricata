@@ -34,10 +34,10 @@
 
 #ifdef HAVE_PFRING
 #include <pfring.h>
-#endif
 
 #define PFRING_CONF_V1 1
 #define PFRING_CONF_V2 2
+#endif
 
 const char *RunModeIdsPfringGetDefaultMode(void)
 {
@@ -63,7 +63,6 @@ void RunModeIdsPfringRegister(void)
             "Workers pfring mode, each thread does all"
             " tasks from acquisition to logging",
             RunModeIdsPfringWorkers, NULL);
-    return;
 }
 
 #ifdef HAVE_PFRING

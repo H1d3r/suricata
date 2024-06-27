@@ -250,11 +250,9 @@ static int DetectGeoipMatch(DetectEngineThreadCtx *det_ctx,
     const DetectGeoipData *geoipdata = (const DetectGeoipData *)ctx;
     int matches = 0;
 
-    if (PKT_IS_PSEUDOPKT(p))
-        return 0;
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
 
-    if (PKT_IS_IPV4(p))
-    {
+    if (PacketIsIPv4(p)) {
         if (geoipdata->flags & ( GEOIP_MATCH_SRC_FLAG | GEOIP_MATCH_BOTH_FLAG ))
         {
             if (CheckGeoMatchIPv4(geoipdata, GET_IPV4_SRC_ADDR_U32(p)))

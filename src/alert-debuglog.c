@@ -173,11 +173,11 @@ static TmEcode AlertDebugLogger(ThreadVars *tv, const Packet *p, void *thread_da
     MemBufferWriteString(aft->buffer, "PKT SRC:           %s\n", pkt_src_str);
 
     char srcip[46], dstip[46];
-    if (PKT_IS_IPV4(p)) {
+    if (PacketIsIPv4(p)) {
         PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
         PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
     } else {
-        DEBUG_VALIDATE_BUG_ON(!(PKT_IS_IPV6(p)));
+        DEBUG_VALIDATE_BUG_ON(!(PacketIsIPv6(p)));
         PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
         PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
     }
@@ -186,14 +186,16 @@ static TmEcode AlertDebugLogger(ThreadVars *tv, const Packet *p, void *thread_da
                          "DST IP:            %s\n"
                          "PROTO:             %" PRIu32 "\n",
                          srcip, dstip, p->proto);
-    if (PKT_IS_TCP(p) || PKT_IS_UDP(p)) {
+    if (PacketIsTCP(p) || PacketIsUDP(p)) {
         MemBufferWriteString(aft->buffer, "SRC PORT:          %" PRIu32 "\n"
                              "DST PORT:          %" PRIu32 "\n",
                              p->sp, p->dp);
-        if (PKT_IS_TCP(p)) {
-            MemBufferWriteString(aft->buffer, "TCP SEQ:           %"PRIu32"\n"
-                                 "TCP ACK:           %"PRIu32"\n",
-                                 TCP_GET_SEQ(p), TCP_GET_ACK(p));
+        if (PacketIsTCP(p)) {
+            const TCPHdr *tcph = PacketGetTCP(p);
+            MemBufferWriteString(aft->buffer,
+                    "TCP SEQ:           %" PRIu32 "\n"
+                    "TCP ACK:           %" PRIu32 "\n",
+                    TCP_GET_RAW_SEQ(tcph), TCP_GET_RAW_ACK(tcph));
         }
     }
 
@@ -286,8 +288,7 @@ static TmEcode AlertDebugLogger(ThreadVars *tv, const Packet *p, void *thread_da
             /* This is an app layer or stream alert */
             int ret;
             uint8_t flag;
-            if (!(PKT_IS_TCP(p)) || p->flow == NULL ||
-                    p->flow->protoctx == NULL) {
+            if (!(PacketIsTCP(p)) || p->flow == NULL || p->flow->protoctx == NULL) {
                 return TM_ECODE_OK;
             }
             /* IDS mode reverse the data */
@@ -473,7 +474,7 @@ static bool AlertDebugLogCondition(ThreadVars *tv, void *thread_data, const Pack
 
 static int AlertDebugLogLogger(ThreadVars *tv, void *thread_data, const Packet *p)
 {
-    if (PKT_IS_IPV4(p) || PKT_IS_IPV6(p)) {
+    if (PacketIsIPv4(p) || PacketIsIPv6(p)) {
         return AlertDebugLogger(tv, p, thread_data);
     } else if (p->events.cnt > 0) {
         return AlertDebugLogDecoderEvent(tv, p, thread_data);

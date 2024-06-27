@@ -61,6 +61,7 @@
 #include "decode-geneve.h"
 #include "decode-erspan.h"
 #include "decode-teredo.h"
+#include "decode-arp.h"
 
 #include "defrag-hash.h"
 
@@ -177,6 +178,8 @@ static int DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, const 
             return DecodeERSPANTypeI(tv, dtv, p, pkt, len);
         case DECODE_TUNNEL_NSH:
             return DecodeNSH(tv, dtv, p, pkt, len);
+        case DECODE_TUNNEL_ARP:
+            return DecodeARP(tv, dtv, p, pkt, len);
         default:
             SCLogDebug("FIXME: DecodeTunnel: protocol %" PRIu32 " not supported.", proto);
             break;
@@ -672,8 +675,11 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
     dtv->counter_defrag_ipv6_fragments =
         StatsRegisterCounter("defrag.ipv6.fragments", tv);
     dtv->counter_defrag_ipv6_reassembled = StatsRegisterCounter("defrag.ipv6.reassembled", tv);
-    dtv->counter_defrag_max_hit =
-        StatsRegisterCounter("defrag.max_frag_hits", tv);
+    dtv->counter_defrag_max_hit = StatsRegisterCounter("defrag.max_trackers_reached", tv);
+    dtv->counter_defrag_no_frags = StatsRegisterCounter("defrag.max_frags_reached", tv);
+    dtv->counter_defrag_tracker_soft_reuse = StatsRegisterCounter("defrag.tracker_soft_reuse", tv);
+    dtv->counter_defrag_tracker_hard_reuse = StatsRegisterCounter("defrag.tracker_hard_reuse", tv);
+    dtv->counter_defrag_tracker_timeout = StatsRegisterCounter("defrag.wrk.tracker_timeout", tv);
 
     ExceptionPolicySetStatsCounters(tv, &dtv->counter_defrag_memcap_eps, &defrag_memcap_eps_stats,
             DefragGetMemcapExceptionPolicy(), "defrag.memcap_exception_policy.",
@@ -728,8 +734,6 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
                     DEvents[i].event_name, tv);
         }
     }
-
-    return;
 }
 
 void DecodeUpdatePacketCounters(ThreadVars *tv,
@@ -773,7 +777,7 @@ DecodeThreadVars *DecodeThreadVarsAlloc(ThreadVars *tv)
     if ((dtv = SCCalloc(1, sizeof(DecodeThreadVars))) == NULL)
         return NULL;
 
-    dtv->app_tctx = AppLayerGetCtxThread(tv);
+    dtv->app_tctx = AppLayerGetCtxThread();
 
     if (OutputFlowLogThreadInit(tv, NULL, &dtv->output_flow_thread_data) != TM_ECODE_OK) {
         SCLogError("initializing flow log API for thread failed");

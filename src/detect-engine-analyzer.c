@@ -27,6 +27,7 @@
 #include "suricata-common.h"
 #include "suricata.h"
 #include "rust.h"
+#include "action-globals.h"
 #include "detect.h"
 #include "detect-parse.h"
 #include "detect-engine.h"
@@ -285,7 +286,6 @@ void EngineAnalysisFP(const DetectEngineCtx *de_ctx, const Signature *s, char *l
     SCFree(pat);
 
     fprintf(fp, "\n");
-    return;
 }
 
 /**
@@ -456,8 +456,6 @@ static void CleanupFPAnalyzer(DetectEngineCtx *de_ctx)
 
     fclose(de_ctx->ea->rule_engine_analysis_fp);
     de_ctx->ea->rule_engine_analysis_fp = NULL;
-
-    return;
 }
 
 static void CleanupRuleAnalyzer(DetectEngineCtx *de_ctx)
@@ -617,8 +615,6 @@ static void EngineAnalysisRulesPrintFP(const DetectEngineCtx *de_ctx, const Sign
         fprintf(ea_ctx->rule_engine_analysis_fp, "(with %d transform(s)) ", bt->transforms.cnt);
     }
     fprintf(ea_ctx->rule_engine_analysis_fp, "buffer.\n");
-
-    return;
 }
 
 void EngineAnalysisRulesFailure(const DetectEngineCtx *de_ctx, char *line, char *file, int lineno)
@@ -977,6 +973,9 @@ void EngineAnalysisRules2(const DetectEngineCtx *de_ctx, const Signature *s)
     if (s->mask & SIG_MASK_REQUIRE_ENGINE_EVENT) {
         jb_append_string(ctx.js, "engine_event");
     }
+    if (s->mask & SIG_MASK_REQUIRE_REAL_PKT) {
+        jb_append_string(ctx.js, "real_pkt");
+    }
     jb_close(ctx.js);
 
     switch (s->type) {
@@ -1028,7 +1027,7 @@ void EngineAnalysisRules2(const DetectEngineCtx *de_ctx, const Signature *s)
     if (s->flags & SIG_FLAG_DP_ANY) {
         jb_append_string(ctx.js, "dp_any");
     }
-    if (s->flags & SIG_FLAG_NOALERT) {
+    if ((s->action & ACTION_ALERT) == 0) {
         jb_append_string(ctx.js, "noalert");
     }
     if (s->flags & SIG_FLAG_DSIZE) {
@@ -1830,5 +1829,4 @@ void EngineAnalysisRules(const DetectEngineCtx *de_ctx,
         }
         fprintf(fp, "\n");
     }
-    return;
 }

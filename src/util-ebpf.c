@@ -30,7 +30,6 @@
  *
  */
 
-#define PCAP_DONT_INCLUDE_PCAP_BPF_H 1
 #define SC_PCAP_DONT_INCLUDE_PCAP_H 1
 
 #include "suricata-common.h"
@@ -587,7 +586,6 @@ void EBPFBypassFree(void *data)
         SCFree(eb->key[1]);
     }
     SCFree(eb);
-    return;
 }
 
 /**

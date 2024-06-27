@@ -23,18 +23,11 @@
  */
 
 #include "suricata-common.h"
-#include "detect.h"
 #include "detect-engine.h"
-#include "detect-engine-mpm.h"
 #include "app-layer-parser.h"
-#include "tm-threads.h"
 #include "util-debug.h"
-#include "util-time.h"
-#include "util-cpu.h"
-#include "util-byte.h"
 #include "util-affinity.h"
 #include "conf.h"
-#include "queue.h"
 #include "runmodes.h"
 #include "runmode-af-packet.h"
 #include "runmode-af-xdp.h"
@@ -56,11 +49,6 @@
 #include "util-plugin.h"
 
 #include "output.h"
-
-#include "alert-fastlog.h"
-#include "alert-debuglog.h"
-
-#include "log-httplog.h"
 
 #include "source-pfring.h"
 
@@ -229,7 +217,7 @@ char *RunmodeGetActive(void)
  */
 const char *RunModeGetMainMode(void)
 {
-    int mainmode = RunmodeGetCurrent();
+    int mainmode = SCRunmodeGet();
 
     return RunModeTranslateModeToName(mainmode);
 }
@@ -259,7 +247,6 @@ void RunModeRegisterRunModes(void)
 #ifdef UNITTESTS
     UtRunModeRegister();
 #endif
-    return;
 }
 
 /**
@@ -302,8 +289,6 @@ void RunModeListRunmodes(void)
                    "-----------------------\n");
         }
     }
-
-    return;
 }
 
 static const char *RunModeGetConfOrDefault(int capture_mode, const char *capture_plugin_name)
@@ -532,8 +517,6 @@ void RunModeRegisterNewRunMode(enum RunModes runmode, const char *name, const ch
     }
     mode->RunModeFunc = RunModeFunc;
     mode->RunModeIsIPSEnabled = RunModeIsIPSEnabled;
-
-    return;
 }
 
 /**
@@ -841,13 +824,6 @@ void RunModeInitializeOutputs(void)
         } else if (strncmp(output->val, "unified2-", sizeof("unified2-") - 1) == 0) {
             SCLogWarning("Unified2 is no longer supported.");
             continue;
-        } else if (strcmp(output->val, "lua") == 0) {
-#ifndef HAVE_LUA
-            SCLogWarning("lua support not compiled in. Reconfigure/"
-                         "recompile with lua(jit) and its development "
-                         "files installed to add lua support.");
-            continue;
-#endif
         } else if (strcmp(output->val, "dns-log") == 0) {
             SCLogWarning("dns-log is not longer available as of Suricata 5.0");
             continue;

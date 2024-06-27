@@ -54,8 +54,6 @@ typedef struct Frag_ {
     uint8_t more_frags:4;       /**< More frags? */
     uint8_t skip:4;             /**< Skip this fragment during re-assembly. */
 
-    uint16_t ip_hdr_offset;     /**< Offset in the packet where the IP
-                                 * header starts. */
     uint16_t frag_hdr_offset;   /**< Offset in the packet where the frag
                                  * header starts. */
 
@@ -88,6 +86,8 @@ typedef struct DefragTracker_ {
                            * this tracker. */
 
     uint16_t vlan_id[VLAN_MAX_LAYERS]; /**< VLAN ID tracker applies to. */
+    uint16_t ip_hdr_offset;            /**< Offset in the packet where the IP
+                                        * header starts. */
 
     uint32_t id; /**< IP ID for this tracker.  32 bits for IPv6, 16
                   * for IPv4. */
@@ -115,13 +115,11 @@ typedef struct DefragTracker_ {
 
     struct IP_FRAGMENTS fragment_tree;
 
-    /** hash pointers, protected by hash row mutex/spin */
+    /** hash pointer, protected by hash row mutex/spin */
     struct DefragTracker_ *hnext;
-    struct DefragTracker_ *hprev;
 
-    /** list pointers, protected by tracker-queue mutex/spin */
+    /** stack pointer, protected by tracker-queue mutex/spin */
     struct DefragTracker_ *lnext;
-    struct DefragTracker_ *lprev;
 } DefragTracker;
 
 void DefragInit(void);

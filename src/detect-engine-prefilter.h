@@ -47,17 +47,13 @@ typedef struct PrefilterStore_ {
     uint32_t id;
 } PrefilterStore;
 
-void Prefilter(DetectEngineThreadCtx *, const SigGroupHead *, Packet *p,
-        const uint8_t flags);
+void Prefilter(DetectEngineThreadCtx *, const SigGroupHead *, Packet *p, const uint8_t flags,
+        const SignatureMask mask);
 
-int PrefilterAppendEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
-        void (*Prefilter)(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx),
-        void *pectx, void (*FreeFunc)(void *pectx),
-        const char *name);
+int PrefilterAppendEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh, PrefilterPktFn PrefilterFunc,
+        SignatureMask mask, void *pectx, void (*FreeFunc)(void *pectx), const char *name);
 int PrefilterAppendPayloadEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
-        void (*Prefilter)(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx),
-        void *pectx, void (*FreeFunc)(void *pectx),
-        const char *name);
+        PrefilterPktFn PrefilterFunc, void *pectx, void (*FreeFunc)(void *pectx), const char *name);
 int PrefilterAppendTxEngine(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
         PrefilterTxFn PrefilterTxFunc, const AppProto alproto, const int tx_min_progress,
         void *pectx, void (*FreeFunc)(void *pectx), const char *name);
@@ -87,6 +83,9 @@ void PrefilterInit(DetectEngineCtx *de_ctx);
 void PrefilterDeinit(DetectEngineCtx *de_ctx);
 
 int PrefilterGenericMpmRegister(DetectEngineCtx *de_ctx, SigGroupHead *sgh, MpmCtx *mpm_ctx,
+        const DetectBufferMpmRegistry *mpm_reg, int list_id);
+
+int PrefilterMultiGenericMpmRegister(DetectEngineCtx *de_ctx, SigGroupHead *sgh, MpmCtx *mpm_ctx,
         const DetectBufferMpmRegistry *mpm_reg, int list_id);
 
 int PrefilterGenericMpmPktRegister(DetectEngineCtx *de_ctx, SigGroupHead *sgh, MpmCtx *mpm_ctx,

@@ -68,6 +68,7 @@ Metadata::
             #payload: yes             # enable dumping payload in Base64
             #payload-buffer-size: 4kb # max size of payload buffer to output in eve-log
             #payload-printable: yes   # enable dumping payload in printable (lossy) format
+            #payload-length: yes      # enable dumping payload length
             #packet: yes              # enable dumping of packet (without stream segments)
             #http-body: yes           # Requires metadata; enable dumping of http body in Base64
             #http-body-printable: yes # Requires metadata; enable dumping of http body in printable format
@@ -265,6 +266,20 @@ The default is to log certificate subject and issuer. If ``extended`` is
 enabled, then the log gets more verbose.
 
 By using ``custom`` it is possible to select which TLS fields to log.
+
+ARP
+~~~
+
+ARP records are logged as one entry for the request, and one entry for
+the response.
+
+YAML::
+
+        - arp:
+            enabled: no
+
+The logger is disabled by default since ARP can generate a large
+number of events.
 
 Drops
 ~~~~~

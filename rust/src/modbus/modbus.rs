@@ -189,7 +189,7 @@ impl ModbusState {
                                 None => {
                                     let mut tx = match self.new_tx() {
                                         Some(tx) => tx,
-                                        None => return AppLayerResult::ok(),
+                                        None => return AppLayerResult::err(),
                                     };
                                     tx.set_events_from_flags(&msg.error_flags);
                                     tx.request = Some(msg);
@@ -215,7 +215,7 @@ impl ModbusState {
                             None => {
                                 let mut tx = match self.new_tx() {
                                     Some(tx) => tx,
-                                    None => return AppLayerResult::ok(),
+                                    None => return AppLayerResult::err(),
                                 };
                                 if msg
                                     .access_type
@@ -274,6 +274,9 @@ impl ModbusState {
 pub extern "C" fn rs_modbus_probe(
     _flow: *const core::Flow, _direction: u8, input: *const u8, len: u32, _rdir: *mut u8,
 ) -> AppProto {
+    if input.is_null() {
+        return ALPROTO_UNKNOWN;
+    }
     let slice: &[u8] = unsafe { std::slice::from_raw_parts(input as *mut u8, len as usize) };
     match MODBUS_PARSER.probe(slice, Direction::Unknown) {
         Status::Recognized => unsafe { ALPROTO_MODBUS },

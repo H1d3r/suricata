@@ -53,7 +53,6 @@
 #include "util-datalink.h"
 #include "util-misc.h"
 #include "util-path.h"
-#include "util-profiling.h"
 #include "util-time.h"
 
 #define DEFAULT_LOG_FILENAME            "pcaplog"
@@ -85,6 +84,7 @@ typedef enum LogModeConditionalType_ {
 
 #define PCAP_SNAPLEN                    262144
 #define PCAP_BUFFER_TIMEOUT             1000000 // microseconds
+#define PCAP_PKTHDR_SIZE                16
 
 SC_ATOMIC_DECLARE(uint32_t, thread_cnt);
 
@@ -215,7 +215,6 @@ void PcapLogRegister(void)
     PcapLogProfileSetup();
     SC_ATOMIC_INIT(thread_cnt);
     SC_ATOMIC_SET(thread_cnt, 1); /* first id is 1 */
-    return;
 }
 
 #define PCAPLOG_PROFILE_START \
@@ -235,10 +234,8 @@ static bool PcapLogCondition(ThreadVars *tv, void *thread_data, const Packet *p)
             break;
         case LOGMODE_COND_ALERTS:
             return (p->alerts.cnt || (p->flow && FlowHasAlerts(p->flow)));
-            break;
         case LOGMODE_COND_TAG:
             return (p->flags & (PKT_HAS_TAG | PKT_FIRST_TAG));
-            break;
     }
 
     if (p->flags & PKT_PSEUDO_STREAM_END) {
@@ -324,8 +321,6 @@ static void PcapFileNameFree(PcapFileName *pf)
         }
         SCFree(pf);
     }
-
-    return;
 }
 
 /**
@@ -486,7 +481,7 @@ static inline int PcapWrite(
         pl->size_current += len;
     }
 #ifdef HAVE_LIBLZ4
-    else if (pl->compression.format == PCAP_LOG_COMPRESSION_FORMAT_LZ4) {
+    else if (comp->format == PCAP_LOG_COMPRESSION_FORMAT_LZ4) {
         pcap_dump_flush(pl->pcap_dumper);
         long in_size = ftell(comp->pcap_buf_wrapper);
         if (in_size < 0) {
@@ -499,7 +494,7 @@ static inline int PcapWrite(
             SCLogError("LZ4F_compressUpdate: %s", LZ4F_getErrorName(len));
             return TM_ECODE_FAILED;
         }
-        if (fseek(pl->compression.pcap_buf_wrapper, 0, SEEK_SET) != 0) {
+        if (fseek(comp->pcap_buf_wrapper, 0, SEEK_SET) != 0) {
             SCLogError("fseek failed: %s", strerror(errno));
             return TM_ECODE_FAILED;
         }
@@ -524,7 +519,7 @@ static inline int PcapWrite(
 
 struct PcapLogCallbackContext {
     PcapLogData *pl;
-    PcapLogCompressionData *connp;
+    PcapLogCompressionData *comp;
     MemBuffer *buf;
 };
 
@@ -542,19 +537,18 @@ static int PcapLogSegmentCallback(
         MemBufferWriteRaw(pctx->buf, seg->pcap_hdr_storage->pkt_hdr, seg->pcap_hdr_storage->pktlen);
         MemBufferWriteRaw(pctx->buf, buf, buflen);
 
-        PcapWrite(pctx->pl, pctx->connp, (uint8_t *)pctx->buf->buffer, pctx->pl->h->len);
+        PcapWrite(pctx->pl, pctx->comp, (uint8_t *)pctx->buf->buffer, pctx->pl->h->len);
     }
     return 1;
 }
 
 static void PcapLogDumpSegments(
-        PcapLogThreadData *td, PcapLogCompressionData *connp, const Packet *p)
+        PcapLogThreadData *td, PcapLogCompressionData *comp, const Packet *p)
 {
-    uint8_t flag;
-    flag = STREAM_DUMP_HEADERS;
+    uint8_t flag = STREAM_DUMP_HEADERS;
 
     /* Loop on segment from this side */
-    struct PcapLogCallbackContext data = { td->pcap_log, connp, td->buf };
+    struct PcapLogCallbackContext data = { td->pcap_log, comp, td->buf };
     StreamSegmentForSession(p, flag, PcapLogSegmentCallback, (void *)&data);
 }
 
@@ -571,7 +565,6 @@ static void PcapLogDumpSegments(
 static int PcapLog (ThreadVars *t, void *thread_data, const Packet *p)
 {
     size_t len;
-    int rotate = 0;
     int ret = 0;
     Packet *rp = NULL;
 
@@ -592,11 +585,11 @@ static int PcapLog (ThreadVars *t, void *thread_data, const Packet *p)
         rp = p->root;
         pl->h->caplen = GET_PKT_LEN(rp);
         pl->h->len = GET_PKT_LEN(rp);
-        len = sizeof(*pl->h) + GET_PKT_LEN(rp);
+        len = PCAP_PKTHDR_SIZE + GET_PKT_LEN(rp);
     } else {
         pl->h->caplen = GET_PKT_LEN(p);
         pl->h->len = GET_PKT_LEN(p);
-        len = sizeof(*pl->h) + GET_PKT_LEN(p);
+        len = PCAP_PKTHDR_SIZE + GET_PKT_LEN(p);
     }
 
     if (pl->filename == NULL) {
@@ -610,7 +603,7 @@ static int PcapLog (ThreadVars *t, void *thread_data, const Packet *p)
 
     PcapLogCompressionData *comp = &pl->compression;
     if (comp->format == PCAP_LOG_COMPRESSION_FORMAT_NONE) {
-        if ((pl->size_current + len) > pl->size_limit || rotate) {
+        if ((pl->size_current + len) > pl->size_limit) {
             if (PcapLogRotateFile(t,pl) < 0) {
                 PcapLogUnlock(pl);
                 SCLogDebug("rotation of pcap failed");
@@ -626,8 +619,7 @@ static int PcapLog (ThreadVars *t, void *thread_data, const Packet *p)
          * bytes that have been fed into lz4 since the last write, and
          * act as if they would be written uncompressed. */
 
-        if ((pl->size_current + comp->bytes_in_block + len) > pl->size_limit ||
-                rotate) {
+        if ((pl->size_current + comp->bytes_in_block + len) > pl->size_limit) {
             if (PcapLogRotateFile(t,pl) < 0) {
                 PcapLogUnlock(pl);
                 SCLogDebug("rotation of pcap failed");
@@ -651,13 +643,10 @@ static int PcapLog (ThreadVars *t, void *thread_data, const Packet *p)
     /* if we are using alerted logging and if packet is first one with alert in flow
      * then we need to dump in the pcap the stream acked by the packet */
     if ((p->flags & PKT_FIRST_ALERTS) && (td->pcap_log->conditional != LOGMODE_COND_ALL)) {
-        if (PKT_IS_TCP(p)) {
+        if (PacketIsTCP(p)) {
             /* dump fake packets for all segments we have on acked by packet */
-#ifdef HAVE_LIBLZ4
             PcapLogDumpSegments(td, comp, p);
-#else
-            PcapLogDumpSegments(td, NULL, p);
-#endif
+
             if (p->flags & PKT_PSEUDO_STREAM_END) {
                 PcapLogUnlock(pl);
                 return TM_ECODE_OK;
@@ -670,28 +659,20 @@ static int PcapLog (ThreadVars *t, void *thread_data, const Packet *p)
                 rp = p->root;
                 pl->h->caplen = GET_PKT_LEN(rp);
                 pl->h->len = GET_PKT_LEN(rp);
-                len = sizeof(*pl->h) + GET_PKT_LEN(rp);
+                len = PCAP_PKTHDR_SIZE + GET_PKT_LEN(rp);
             } else {
                 pl->h->caplen = GET_PKT_LEN(p);
                 pl->h->len = GET_PKT_LEN(p);
-                len = sizeof(*pl->h) + GET_PKT_LEN(p);
+                len = PCAP_PKTHDR_SIZE + GET_PKT_LEN(p);
             }
         }
     }
 
     if (p->ttype == PacketTunnelChild) {
         rp = p->root;
-#ifdef HAVE_LIBLZ4
         ret = PcapWrite(pl, comp, GET_PKT_DATA(rp), len);
-#else
-        ret = PcapWrite(pl, NULL, GET_PKT_DATA(rp), len);
-#endif
     } else {
-#ifdef HAVE_LIBLZ4
         ret = PcapWrite(pl, comp, GET_PKT_DATA(p), len);
-#else
-        ret = PcapWrite(pl, NULL, GET_PKT_DATA(p), len);
-#endif
     }
     if (ret != TM_ECODE_OK) {
         PCAPLOG_PROFILE_END(pl->profile_write);
@@ -808,8 +789,7 @@ static PcapLogData *PcapLogDataCopy(const PcapLogData *pl)
 
     strlcpy(copy->dir, pl->dir, sizeof(copy->dir));
 
-    int i;
-    for (i = 0; i < pl->filename_part_cnt && i < MAX_TOKS; i++)
+    for (int i = 0; i < pl->filename_part_cnt && i < MAX_TOKS; i++)
         copy->filename_parts[i] = pl->filename_parts[i];
     copy->filename_part_cnt = pl->filename_part_cnt;
 
@@ -1091,7 +1071,7 @@ static TmEcode PcapLogDataInit(ThreadVars *t, const void *initdata, void **data)
 
     /* Don't early initialize output files if in a PCAP file (offline)
      * mode. */
-    if (!IsRunModeOffline(RunmodeGetCurrent())) {
+    if (!IsRunModeOffline(SCRunmodeGet())) {
         if (pl->mode == LOGMODE_MULTI) {
             PcapLogOpenFileCtx(td->pcap_log);
         } else {
@@ -1219,7 +1199,6 @@ static int ParseFilename(PcapLogData *pl, const char *filename)
     int tok = 0;
     char str[MAX_FILENAMELEN] = "";
     int s = 0;
-    int i, x;
     char *p = NULL;
     size_t filename_len = 0;
 
@@ -1230,7 +1209,7 @@ static int ParseFilename(PcapLogData *pl, const char *filename)
             goto error;
         }
 
-        for (i = 0; i < (int)strlen(filename); i++) {
+        for (int i = 0; i < (int)strlen(filename); i++) {
             if (tok >= MAX_TOKS) {
                 SCLogError("invalid filename option. Max 2 %%-sign options");
                 goto error;
@@ -1291,7 +1270,7 @@ static int ParseFilename(PcapLogData *pl, const char *filename)
         }
 
         /* finally, store tokens in the pl */
-        for (i = 0; i < tok; i++) {
+        for (int i = 0; i < tok; i++) {
             if (toks[i] == NULL)
                 goto error;
 
@@ -1302,7 +1281,7 @@ static int ParseFilename(PcapLogData *pl, const char *filename)
     }
     return 0;
 error:
-    for (x = 0; x < MAX_TOKS; x++) {
+    for (int x = 0; x < MAX_TOKS; x++) {
         if (toks[x] != NULL)
             SCFree(toks[x]);
     }
@@ -1653,8 +1632,6 @@ static void PcapLogFileDeInitCtx(OutputCtx *output_ctx)
 
     pcre2_code_free(pcre_timestamp_code);
     pcre2_match_data_free(pcre_timestamp_match);
-
-    return;
 }
 
 /**
@@ -1711,8 +1688,7 @@ static int PcapLogOpenFileCtx(PcapLogData *pl)
             strlcpy(filename, pl->dir, PATH_MAX);
             strlcat(filename, "/", PATH_MAX);
 
-            int i;
-            for (i = 0; i < pl->filename_part_cnt; i++) {
+            for (int i = 0; i < pl->filename_part_cnt; i++) {
                 if (pl->filename_parts[i] == NULL ||strlen(pl->filename_parts[i]) == 0)
                     continue;
 

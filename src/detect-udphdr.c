@@ -64,9 +64,7 @@ void DetectUdphdrRegister(void)
 
     DetectPktMpmRegister("udp.hdr", 2, PrefilterGenericMpmPktRegister, GetData);
 
-    DetectPktInspectEngineRegister("udp.hdr", GetData,
-            DetectEngineInspectPktBufferGeneric);
-    return;
+    DetectPktInspectEngineRegister("udp.hdr", GetData, DetectEngineInspectPktBufferGeneric);
 }
 
 /**
@@ -99,20 +97,19 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
 
     InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
-        if (p->udph == NULL) {
+        if (!PacketIsUDP(p)) {
             return NULL;
         }
-        if (((uint8_t *)p->udph + (ptrdiff_t)UDP_HEADER_LEN) >
-                ((uint8_t *)GET_PKT_DATA(p) + (ptrdiff_t)GET_PKT_LEN(p)))
-        {
-            SCLogDebug("data out of range: %p > %p",
-                    ((uint8_t *)p->udph + (ptrdiff_t)UDP_HEADER_LEN),
+        const UDPHdr *udph = PacketGetUDP(p);
+        if (((uint8_t *)udph + (ptrdiff_t)UDP_HEADER_LEN) >
+                ((uint8_t *)GET_PKT_DATA(p) + (ptrdiff_t)GET_PKT_LEN(p))) {
+            SCLogDebug("data out of range: %p > %p", ((uint8_t *)udph + (ptrdiff_t)UDP_HEADER_LEN),
                     ((uint8_t *)GET_PKT_DATA(p) + (ptrdiff_t)GET_PKT_LEN(p)));
             return NULL;
         }
 
         const uint32_t data_len = UDP_HEADER_LEN;
-        const uint8_t *data = (const uint8_t *)p->udph;
+        const uint8_t *data = (const uint8_t *)udph;
 
         InspectionBufferSetup(det_ctx, list_id, buffer, data, data_len);
         InspectionBufferApplyTransforms(buffer, transforms);

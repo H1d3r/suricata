@@ -84,14 +84,14 @@ void DetectITypeRegister (void)
 static int DetectITypeMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
-    if (PKT_IS_PSEUDOPKT(p))
-        return 0;
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
 
     uint8_t pitype;
-    if (PKT_IS_ICMPV4(p)) {
-        pitype = ICMPV4_GET_TYPE(p);
-    } else if (PKT_IS_ICMPV6(p)) {
-        pitype = ICMPV6_GET_TYPE(p);
+    if (PacketIsICMPv4(p)) {
+        pitype = p->icmp_s.type;
+    } else if (PacketIsICMPv6(p)) {
+        const ICMPV6Hdr *icmpv6h = PacketGetICMPv6(p);
+        pitype = ICMPV6_GET_TYPE(icmpv6h);
     } else {
         /* Packet not ICMPv4 nor ICMPv6 */
         return 0;
@@ -167,15 +167,14 @@ void DetectITypeFree(DetectEngineCtx *de_ctx, void *ptr)
 static void PrefilterPacketITypeMatch(DetectEngineThreadCtx *det_ctx,
         Packet *p, const void *pectx)
 {
-    if (PKT_IS_PSEUDOPKT(p)) {
-        SCReturn;
-    }
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
 
     uint8_t pitype;
-    if (PKT_IS_ICMPV4(p)) {
-        pitype = ICMPV4_GET_TYPE(p);
-    } else if (PKT_IS_ICMPV6(p)) {
-        pitype = ICMPV6_GET_TYPE(p);
+    if (PacketIsICMPv4(p)) {
+        pitype = p->icmp_s.type;
+    } else if (PacketIsICMPv6(p)) {
+        const ICMPV6Hdr *icmpv6h = PacketGetICMPv6(p);
+        pitype = ICMPV6_GET_TYPE(icmpv6h);
     } else {
         /* Packet not ICMPv4 nor ICMPv6 */
         return;
@@ -190,8 +189,8 @@ static void PrefilterPacketITypeMatch(DetectEngineThreadCtx *det_ctx,
 
 static int PrefilterSetupIType(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeaderU8Hash(de_ctx, sgh, DETECT_ITYPE, PrefilterPacketU8Set,
-            PrefilterPacketU8Compare, PrefilterPacketITypeMatch);
+    return PrefilterSetupPacketHeaderU8Hash(de_ctx, sgh, DETECT_ITYPE, SIG_MASK_REQUIRE_REAL_PKT,
+            PrefilterPacketU8Set, PrefilterPacketU8Compare, PrefilterPacketITypeMatch);
 }
 
 static bool PrefilterITypeIsPrefilterable(const Signature *s)
@@ -332,7 +331,6 @@ static int DetectITypeParseTest08(void)
     DetectU8Data *itd = NULL;
     itd = DetectITypeParse(NULL, "> 8 <> 20");
     FAIL_IF_NOT_NULL(itd);
-    DetectITypeFree(NULL, itd);
 
     PASS;
 }

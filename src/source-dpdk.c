@@ -366,7 +366,7 @@ static void DPDKReleasePacket(Packet *p)
     if ((p->dpdk_v.copy_mode == DPDK_COPY_MODE_TAP ||
                 (p->dpdk_v.copy_mode == DPDK_COPY_MODE_IPS && !PacketCheckAction(p, ACTION_DROP)))
 #if defined(RTE_LIBRTE_I40E_PMD) || defined(RTE_LIBRTE_IXGBE_PMD) || defined(RTE_LIBRTE_ICE_PMD)
-            && !(PKT_IS_ICMPV6(p) && p->icmpv6h->type == 143)
+            && !(PacketIsICMPv6(p) && PacketGetICMPv6(p)->type == 143)
 #endif
     ) {
         BUG_ON(PKT_IS_PSEUDOPKT(p));
@@ -494,11 +494,13 @@ static inline Packet *PacketInitFromMbuf(DPDKThreadVars *ptv, struct rte_mbuf *m
             if ((ol_flags & RTE_MBUF_F_RX_IP_CKSUM_MASK) == RTE_MBUF_F_RX_IP_CKSUM_BAD) {
                 SCLogDebug("HW detected BAD IP checksum");
                 // chsum recalc will not be triggered but rule keyword check will be
-                p->level3_comp_csum = 0;
+                p->l3.csum_set = true;
+                p->l3.csum = 0;
             }
             if ((ol_flags & RTE_MBUF_F_RX_L4_CKSUM_MASK) == RTE_MBUF_F_RX_L4_CKSUM_BAD) {
                 SCLogDebug("HW detected BAD L4 chsum");
-                p->level4_comp_csum = 0;
+                p->l4.csum_set = true;
+                p->l4.csum = 0;
             }
         }
     }

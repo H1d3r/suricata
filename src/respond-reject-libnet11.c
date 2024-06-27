@@ -80,7 +80,7 @@ typedef struct Libnet11Packet_ {
     uint32_t src4, dst4;
     uint16_t sp, dp;
     uint16_t len;
-    uint8_t *smac, *dmac;
+    const uint8_t *smac, *dmac;
 } Libnet11Packet;
 
 static inline libnet_t *GetCtx(const Packet *p, int injection_type)
@@ -133,6 +133,7 @@ void FreeCachedCtx(void)
 
 static inline void SetupTCP(Packet *p, Libnet11Packet *lpacket, enum RejectDirection dir)
 {
+    const TCPHdr *tcph = PacketGetTCP(p);
     switch (dir) {
         case REJECT_DIR_SRC:
             SCLogDebug("sending a tcp reset to src");
@@ -141,28 +142,28 @@ static inline void SetupTCP(Packet *p, Libnet11Packet *lpacket, enum RejectDirec
              *  the normal way. If packet has a ACK, the seq of the RST packet
              *  is equal to the ACK of incoming packet and the ACK is build
              *  using packet sequence number and size of the data. */
-            if (TCP_GET_ACK(p) == 0) {
+            if (TCP_GET_RAW_ACK(tcph) == 0) {
                 lpacket->seq = 0;
-                lpacket->ack = TCP_GET_SEQ(p) + lpacket->dsize + 1;
+                lpacket->ack = TCP_GET_RAW_SEQ(tcph) + lpacket->dsize + 1;
             } else {
-                lpacket->seq = TCP_GET_ACK(p);
-                lpacket->ack = TCP_GET_SEQ(p) + lpacket->dsize;
+                lpacket->seq = TCP_GET_RAW_ACK(tcph);
+                lpacket->ack = TCP_GET_RAW_SEQ(tcph) + lpacket->dsize;
             }
 
-            lpacket->sp = TCP_GET_DST_PORT(p);
-            lpacket->dp = TCP_GET_SRC_PORT(p);
+            lpacket->sp = p->dp;
+            lpacket->dp = p->sp;
             break;
         case REJECT_DIR_DST:
         default:
             SCLogDebug("sending a tcp reset to dst");
-            lpacket->seq = TCP_GET_SEQ(p);
-            lpacket->ack = TCP_GET_ACK(p);
+            lpacket->seq = TCP_GET_RAW_SEQ(tcph);
+            lpacket->ack = TCP_GET_RAW_ACK(tcph);
 
-            lpacket->sp = TCP_GET_SRC_PORT(p);
-            lpacket->dp = TCP_GET_DST_PORT(p);
+            lpacket->sp = p->sp;
+            lpacket->dp = p->dp;
             break;
     }
-    lpacket->window = TCP_GET_WINDOW(p);
+    lpacket->window = TCP_GET_RAW_WINDOW(tcph);
     //lpacket.seq += lpacket.dsize;
 }
 
@@ -236,15 +237,16 @@ static inline int BuildIPv6(libnet_t *c, Libnet11Packet *lpacket, const uint8_t 
 
 static inline void SetupEthernet(Packet *p, Libnet11Packet *lpacket, enum RejectDirection dir)
 {
+    const EthernetHdr *ethh = PacketGetEthernet(p);
     switch (dir) {
         case REJECT_DIR_SRC:
-            lpacket->smac = p->ethh->eth_dst;
-            lpacket->dmac = p->ethh->eth_src;
+            lpacket->smac = ethh->eth_dst;
+            lpacket->dmac = ethh->eth_src;
             break;
         case REJECT_DIR_DST:
         default:
-            lpacket->smac = p->ethh->eth_src;
-            lpacket->dmac = p->ethh->eth_dst;
+            lpacket->smac = ethh->eth_src;
+            lpacket->dmac = ethh->eth_dst;
             break;
     }
 }
@@ -282,7 +284,7 @@ int RejectSendLibnet11IPv4TCP(ThreadVars *tv, Packet *p, void *data, enum Reject
     lpacket.flow = 0;
     lpacket.class = 0;
 
-    if (p->tcph == NULL)
+    if (!PacketIsTCP(p))
         return 1;
 
     libnet_t *c = GetCtx(p, LIBNET_RAW4);
@@ -339,6 +341,7 @@ cleanup:
 
 int RejectSendLibnet11IPv4ICMP(ThreadVars *tv, Packet *p, void *data, enum RejectDirection dir)
 {
+    const IPV4Hdr *ip4h = PacketGetIPv4(p);
     Libnet11Packet lpacket;
     int result;
 
@@ -347,7 +350,7 @@ int RejectSendLibnet11IPv4ICMP(ThreadVars *tv, Packet *p, void *data, enum Rejec
     lpacket.id = 0;
     lpacket.flow = 0;
     lpacket.class = 0;
-    const uint16_t iplen = IPV4_GET_IPLEN(p);
+    const uint16_t iplen = IPV4_GET_RAW_IPLEN(ip4h);
     if (g_reject_dev_mtu >= ETHERNET_HEADER_LEN + LIBNET_IPV4_H + 8) {
         lpacket.len = MIN(g_reject_dev_mtu - ETHERNET_HEADER_LEN, (LIBNET_IPV4_H + iplen));
     } else {
@@ -375,14 +378,13 @@ int RejectSendLibnet11IPv4ICMP(ThreadVars *tv, Packet *p, void *data, enum Rejec
     lpacket.ttl = 64;
 
     /* build the package */
-    if ((libnet_build_icmpv4_unreach(
-                    ICMP_DEST_UNREACH,        /* type */
-                    ICMP_HOST_ANO,            /* code */
-                    0,                        /* checksum */
-                    (uint8_t *)p->ip4h,       /* payload */
-                    lpacket.dsize,            /* payload length */
-                    c,                        /* libnet context */
-                    0)) < 0)                  /* libnet ptag */
+    if ((libnet_build_icmpv4_unreach(ICMP_DEST_UNREACH, /* type */
+                ICMP_HOST_ANO,                          /* code */
+                0,                                      /* checksum */
+                (uint8_t *)ip4h,                        /* payload */
+                lpacket.dsize,                          /* payload length */
+                c,                                      /* libnet context */
+                0)) < 0)                                /* libnet ptag */
     {
         SCLogError("libnet_build_icmpv4_unreach %s", libnet_geterror(c));
         goto cleanup;
@@ -425,8 +427,8 @@ int RejectSendLibnet11IPv6TCP(ThreadVars *tv, Packet *p, void *data, enum Reject
     lpacket.flow = 0;
     lpacket.class = 0;
 
-    if (p->tcph == NULL)
-       return 1;
+    if (!PacketIsTCP(p))
+        return 1;
 
     libnet_t *c = GetCtx(p, LIBNET_RAW6);
     if (c == NULL)
@@ -481,6 +483,7 @@ cleanup:
 #ifdef HAVE_LIBNET_ICMPV6_UNREACH
 int RejectSendLibnet11IPv6ICMP(ThreadVars *tv, Packet *p, void *data, enum RejectDirection dir)
 {
+    const IPV6Hdr *ip6h = PacketGetIPv6(p);
     Libnet11Packet lpacket;
     int result;
 
@@ -489,7 +492,7 @@ int RejectSendLibnet11IPv6ICMP(ThreadVars *tv, Packet *p, void *data, enum Rejec
     lpacket.id = 0;
     lpacket.flow = 0;
     lpacket.class = 0;
-    const uint16_t iplen = IPV6_GET_PLEN(p);
+    const uint16_t iplen = IPV6_GET_RAW_PLEN(ip6h);
     if (g_reject_dev_mtu >= ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + 8) {
         lpacket.len = IPV6_HEADER_LEN + MIN(g_reject_dev_mtu - ETHERNET_HEADER_LEN, iplen);
     } else {
@@ -517,14 +520,13 @@ int RejectSendLibnet11IPv6ICMP(ThreadVars *tv, Packet *p, void *data, enum Rejec
     lpacket.ttl = 64;
 
     /* build the package */
-    if ((libnet_build_icmpv6_unreach(
-                    ICMP6_DST_UNREACH,        /* type */
-                    ICMP6_DST_UNREACH_ADMIN,  /* code */
-                    0,                        /* checksum */
-                    (uint8_t *)p->ip6h,       /* payload */
-                    lpacket.dsize,            /* payload length */
-                    c,                        /* libnet context */
-                    0)) < 0)                  /* libnet ptag */
+    if ((libnet_build_icmpv6_unreach(ICMP6_DST_UNREACH, /* type */
+                ICMP6_DST_UNREACH_ADMIN,                /* code */
+                0,                                      /* checksum */
+                (uint8_t *)ip6h,                        /* payload */
+                lpacket.dsize,                          /* payload length */
+                c,                                      /* libnet context */
+                0)) < 0)                                /* libnet ptag */
     {
         SCLogError("libnet_build_icmpv6_unreach %s", libnet_geterror(c));
         goto cleanup;

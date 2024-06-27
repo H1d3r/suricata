@@ -74,7 +74,7 @@
 #include "util-validate.h"
 
 /* Table with all filehandler registrations */
-DetectFileHandlerTableElmt filehandler_table[DETECT_TBLSIZE];
+DetectFileHandlerTableElmt filehandler_table[DETECT_TBLSIZE_STATIC];
 
 void DetectFileRegisterFileProtocols(DetectFileHandlerTableElmt *reg)
 {
@@ -124,7 +124,7 @@ void DetectFileRegisterFileProtocols(DetectFileHandlerTableElmt *reg)
 }
 
 /* Table with all SigMatch registrations */
-SigTableElmt sigmatch_table[DETECT_TBLSIZE];
+SigTableElmt *sigmatch_table = NULL;
 
 extern bool sc_set_caps;
 
@@ -144,17 +144,6 @@ typedef struct SigDuplWrapper_ {
     /* the signature right before the above signature in the det_ctx->sig_list */
     Signature *s_prev;
 } SigDuplWrapper;
-
-#define CONFIG_PARTS 8
-
-#define CONFIG_ACTION 0
-#define CONFIG_PROTO  1
-#define CONFIG_SRC    2
-#define CONFIG_SP     3
-#define CONFIG_DIREC  4
-#define CONFIG_DST    5
-#define CONFIG_DP     6
-#define CONFIG_OPTS   7
 
 /** helper structure for sig parsing */
 typedef struct SignatureParser_ {
@@ -394,7 +383,7 @@ bool SigMatchSilentErrorEnabled(const DetectEngineCtx *de_ctx,
 
 bool SigMatchStrictEnabled(const enum DetectKeywordId id)
 {
-    if (id < DETECT_TBLSIZE) {
+    if ((int)id < DETECT_TBLSIZE) {
         return ((sigmatch_table[id].flags & SIGMATCH_STRICT_PARSING) != 0);
     }
     return false;
@@ -549,8 +538,6 @@ void SigMatchRemoveSMFromList(Signature *s, SigMatch *sm, int sm_list)
         sm->prev->next = sm->next;
     if (sm->next != NULL)
         sm->next->prev = sm->prev;
-
-    return;
 }
 
 /**
@@ -813,8 +800,6 @@ static void SigMatchTransferSigMatchAcrossLists(SigMatch *sm,
         sm->next = NULL;
         *dst_sm_list_tail = sm;
     }
-
-    return;
 }
 
 int SigMatchListSMBelongsTo(const Signature *s, const SigMatch *key_sm)
@@ -1217,7 +1202,7 @@ static int SigParseAction(Signature *s, const char *action)
     if (strcasecmp(action, "alert") == 0) {
         s->action = ACTION_ALERT;
     } else if (strcasecmp(action, "drop") == 0) {
-        s->action = ACTION_DROP;
+        s->action = ACTION_DROP | ACTION_ALERT;
     } else if (strcasecmp(action, "pass") == 0) {
         s->action = ACTION_PASS;
     } else if (strcasecmp(action, "reject") == 0 ||
@@ -1225,18 +1210,17 @@ static int SigParseAction(Signature *s, const char *action)
     {
         if (!(SigParseActionRejectValidate(action)))
             return -1;
-        s->action = ACTION_REJECT|ACTION_DROP;
+        s->action = ACTION_REJECT | ACTION_DROP | ACTION_ALERT;
     } else if (strcasecmp(action, "rejectdst") == 0) {
         if (!(SigParseActionRejectValidate(action)))
             return -1;
-        s->action = ACTION_REJECT_DST|ACTION_DROP;
+        s->action = ACTION_REJECT_DST | ACTION_DROP | ACTION_ALERT;
     } else if (strcasecmp(action, "rejectboth") == 0) {
         if (!(SigParseActionRejectValidate(action)))
             return -1;
-        s->action = ACTION_REJECT_BOTH|ACTION_DROP;
+        s->action = ACTION_REJECT_BOTH | ACTION_DROP | ACTION_ALERT;
     } else if (strcasecmp(action, "config") == 0) {
         s->action = ACTION_CONFIG;
-        s->flags |= SIG_FLAG_NOALERT;
     } else {
         SCLogError("An invalid action \"%s\" was given", action);
         return -1;
@@ -2087,9 +2071,7 @@ static int SigValidate(DetectEngineCtx *de_ctx, Signature *s)
             }
         }
     }
-#ifdef HAVE_LUA
     DetectLuaPostSetup(s);
-#endif
 
     if ((s->init_data->init_flags & SIG_FLAG_INIT_JA) && s->alproto != ALPROTO_UNKNOWN &&
             s->alproto != ALPROTO_TLS && s->alproto != ALPROTO_QUIC) {
@@ -2363,8 +2345,6 @@ static void DetectParseDupSigFreeFunc(void *data)
 {
     if (data != NULL)
         SCFree(data);
-
-    return;
 }
 
 /**
@@ -2443,8 +2423,6 @@ void DetectParseDupSigHashFree(DetectEngineCtx *de_ctx)
         HashListTableFree(de_ctx->dup_sig_hash_table);
 
     de_ctx->dup_sig_hash_table = NULL;
-
-    return;
 }
 
 /**

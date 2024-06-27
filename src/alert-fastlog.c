@@ -109,10 +109,10 @@ int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p)
     CreateTimeString(p->ts, timebuf, sizeof(timebuf));
 
     char srcip[46], dstip[46];
-    if (PKT_IS_IPV4(p)) {
+    if (PacketIsIPv4(p)) {
         PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
         PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
-    } else if (PKT_IS_IPV6(p)) {
+    } else if (PacketIsIPv6(p)) {
         PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
         PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
     } else {
@@ -129,15 +129,15 @@ int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p)
 
     char proto[16] = "";
     const char *protoptr;
-    if (SCProtoNameValid(IP_GET_IPPROTO(p))) {
-        protoptr = known_proto[IP_GET_IPPROTO(p)];
+    if (SCProtoNameValid(PacketGetIPProto(p))) {
+        protoptr = known_proto[PacketGetIPProto(p)];
     } else {
-        snprintf(proto, sizeof(proto), "PROTO:%03" PRIu32, IP_GET_IPPROTO(p));
+        snprintf(proto, sizeof(proto), "PROTO:%03" PRIu32, PacketGetIPProto(p));
         protoptr = proto;
     }
     uint16_t src_port_or_icmp = p->sp;
     uint16_t dst_port_or_icmp = p->dp;
-    if (IP_GET_IPPROTO(p) == IPPROTO_ICMP || IP_GET_IPPROTO(p) == IPPROTO_ICMPV6) {
+    if (PacketGetIPProto(p) == IPPROTO_ICMP || PacketGetIPProto(p) == IPPROTO_ICMPV6) {
         src_port_or_icmp = p->icmp_s.type;
         dst_port_or_icmp = p->icmp_s.code;
     }

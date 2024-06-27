@@ -49,8 +49,7 @@ static void SigGenerateAware(const uint8_t *data, size_t size, char *r, size_t *
     *len = snprintf(r, 511, "alert ip any any -> any any (");
     for (size_t i = 0; i + 1 < size && *len < 511; i++) {
         if (data[i] & 0x80) {
-            size_t off = (data[i] & 0x7F + ((data[i + 1] & 0xF) << 7)) %
-                         (sizeof(sigmatch_table) / sizeof(SigTableElmt));
+            size_t off = (data[i] & 0x7F + ((data[i + 1] & 0xF) << 7)) % (DETECT_TBLSIZE);
             if (sigmatch_table[off].flags & SIGMATCH_NOOPT ||
                     ((data[i + 1] & 0x80) && sigmatch_table[off].flags & SIGMATCH_OPTIONAL_OPT)) {
                 *len += snprintf(r + *len, 511 - *len, "; %s;", sigmatch_table[off].name);
@@ -89,7 +88,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         InitGlobal();
 
         GlobalsInitPreConfig();
-        run_mode = RUNMODE_PCAP_FILE;
+        SCRunmodeSet(RUNMODE_PCAP_FILE);
         // redirect logs to /tmp
         ConfigSetLogDirectory("/tmp/");
         // disables checksums validation for fuzzing
@@ -104,7 +103,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         surifuzz.delayed_detect = 1;
 
         PostConfLoadedSetup(&surifuzz);
-        PreRunPostPrivsDropInit(run_mode);
+        PreRunPostPrivsDropInit(SCRunmodeGet());
         PostConfLoadedDetectSetup(&surifuzz);
 
         memset(&tv, 0, sizeof(tv));

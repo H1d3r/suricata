@@ -50,6 +50,8 @@ typedef struct JsonAddrInfo_ {
     Port sp;
     Port dp;
     char proto[JSON_PROTO_LEN];
+    // Ports are logged only when provided by the transport protocol.
+    bool log_port;
 } JsonAddrInfo;
 
 extern const JsonAddrInfo json_addr_info_zero;
@@ -108,13 +110,14 @@ OutputInitResult OutputJsonLogInitSub(ConfNode *conf, OutputCtx *parent_ctx);
 TmEcode JsonLogThreadInit(ThreadVars *t, const void *initdata, void **data);
 TmEcode JsonLogThreadDeinit(ThreadVars *t, void *data);
 
-void EveAddCommonOptions(const OutputJsonCommonSettings *cfg,
-        const Packet *p, const Flow *f, JsonBuilder *js);
+void EveAddCommonOptions(const OutputJsonCommonSettings *cfg, const Packet *p, const Flow *f,
+        JsonBuilder *js, enum OutputJsonLogDirection dir);
 void EveAddMetadata(const Packet *p, const Flow *f, JsonBuilder *js);
 
 int OutputJSONMemBufferCallback(const char *str, size_t size, void *data);
 
 OutputJsonThreadCtx *CreateEveThreadCtx(ThreadVars *t, OutputJsonCtx *ctx);
 void FreeEveThreadCtx(OutputJsonThreadCtx *ctx);
+void JSONFormatAndAddMACAddr(JsonBuilder *js, const char *key, const uint8_t *val, bool is_array);
 
 #endif /* SURICATA_OUTPUT_JSON_H */

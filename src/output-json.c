@@ -25,13 +25,9 @@
  */
 
 #include "suricata-common.h"
-#include "detect.h"
 #include "flow.h"
 #include "conf.h"
 
-#include "threads.h"
-#include "tm-threads.h"
-#include "threadvars.h"
 #include "util-debug.h"
 #include "util-time.h"
 #include "util-var-name.h"
@@ -40,11 +36,7 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-#include "detect-parse.h"
 #include "detect-engine.h"
-#include "detect-engine-mpm.h"
-#include "detect-reference.h"
-#include "app-layer-parser.h"
 #include "util-classification-config.h"
 #include "util-syslog.h"
 
@@ -56,7 +48,6 @@
 #include "output-json.h"
 
 #include "util-byte.h"
-#include "util-privs.h"
 #include "util-print.h"
 #include "util-proto-name.h"
 #include "util-optimize.h"
@@ -79,7 +70,8 @@
 
 static void OutputJsonDeInitCtx(OutputCtx *);
 static void CreateEveCommunityFlowId(JsonBuilder *js, const Flow *f, const uint16_t seed);
-static int CreateJSONEther(JsonBuilder *parent, const Packet *p, const Flow *f);
+static int CreateJSONEther(
+        JsonBuilder *parent, const Packet *p, const Flow *f, enum OutputJsonLogDirection dir);
 
 static const char *TRAFFIC_ID_PREFIX = "traffic/id/";
 static const char *TRAFFIC_LABEL_PREFIX = "traffic/label/";
@@ -413,14 +405,14 @@ void EveAddMetadata(const Packet *p, const Flow *f, JsonBuilder *js)
     }
 }
 
-void EveAddCommonOptions(const OutputJsonCommonSettings *cfg,
-        const Packet *p, const Flow *f, JsonBuilder *js)
+void EveAddCommonOptions(const OutputJsonCommonSettings *cfg, const Packet *p, const Flow *f,
+        JsonBuilder *js, enum OutputJsonLogDirection dir)
 {
     if (cfg->include_metadata) {
         EveAddMetadata(p, f, js);
     }
     if (cfg->include_ethernet) {
-        CreateJSONEther(js, p, f);
+        CreateJSONEther(js, p, f, dir);
     }
     if (cfg->include_community_id && f != NULL) {
         CreateEveCommunityFlowId(js, f, cfg->community_id_seed);
@@ -481,12 +473,12 @@ void JsonAddrInfoInit(const Packet *p, enum OutputJsonLogDirection dir, JsonAddr
 
     switch (dir) {
         case LOG_DIR_PACKET:
-            if (PKT_IS_IPV4(p)) {
+            if (PacketIsIPv4(p)) {
                 PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
                         srcip, sizeof(srcip));
                 PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
                         dstip, sizeof(dstip));
-            } else if (PKT_IS_IPV6(p)) {
+            } else if (PacketIsIPv6(p)) {
                 PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
                         srcip, sizeof(srcip));
                 PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
@@ -501,12 +493,12 @@ void JsonAddrInfoInit(const Packet *p, enum OutputJsonLogDirection dir, JsonAddr
         case LOG_DIR_FLOW:
         case LOG_DIR_FLOW_TOSERVER:
             if ((PKT_IS_TOSERVER(p))) {
-                if (PKT_IS_IPV4(p)) {
+                if (PacketIsIPv4(p)) {
                     PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
                             dstip, sizeof(dstip));
-                } else if (PKT_IS_IPV6(p)) {
+                } else if (PacketIsIPv6(p)) {
                     PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
@@ -515,12 +507,12 @@ void JsonAddrInfoInit(const Packet *p, enum OutputJsonLogDirection dir, JsonAddr
                 sp = p->sp;
                 dp = p->dp;
             } else {
-                if (PKT_IS_IPV4(p)) {
+                if (PacketIsIPv4(p)) {
                     PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
                             dstip, sizeof(dstip));
-                } else if (PKT_IS_IPV6(p)) {
+                } else if (PacketIsIPv6(p)) {
                     PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
@@ -532,12 +524,12 @@ void JsonAddrInfoInit(const Packet *p, enum OutputJsonLogDirection dir, JsonAddr
             break;
         case LOG_DIR_FLOW_TOCLIENT:
             if ((PKT_IS_TOCLIENT(p))) {
-                if (PKT_IS_IPV4(p)) {
+                if (PacketIsIPv4(p)) {
                     PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
                             dstip, sizeof(dstip));
-                } else if (PKT_IS_IPV6(p)) {
+                } else if (PacketIsIPv6(p)) {
                     PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
@@ -546,12 +538,12 @@ void JsonAddrInfoInit(const Packet *p, enum OutputJsonLogDirection dir, JsonAddr
                 sp = p->sp;
                 dp = p->dp;
             } else {
-                if (PKT_IS_IPV4(p)) {
+                if (PacketIsIPv4(p)) {
                     PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
                             dstip, sizeof(dstip));
-                } else if (PKT_IS_IPV6(p)) {
+                } else if (PacketIsIPv6(p)) {
                     PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
                             srcip, sizeof(srcip));
                     PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
@@ -575,15 +567,17 @@ void JsonAddrInfoInit(const Packet *p, enum OutputJsonLogDirection dir, JsonAddr
         case IPPROTO_SCTP:
             addr->sp = sp;
             addr->dp = dp;
+            addr->log_port = true;
             break;
         default:
+            addr->log_port = false;
             break;
     }
 
-    if (SCProtoNameValid(IP_GET_IPPROTO(p))) {
-        strlcpy(addr->proto, known_proto[IP_GET_IPPROTO(p)], sizeof(addr->proto));
+    if (SCProtoNameValid(PacketGetIPProto(p))) {
+        strlcpy(addr->proto, known_proto[PacketGetIPProto(p)], sizeof(addr->proto));
     } else {
-        snprintf(addr->proto, sizeof(addr->proto), "%" PRIu32, IP_GET_IPPROTO(p));
+        snprintf(addr->proto, sizeof(addr->proto), "%" PRIu32, PacketGetIPProto(p));
     }
 }
 
@@ -714,8 +708,7 @@ void CreateEveFlowId(JsonBuilder *js, const Flow *f)
     }
 }
 
-static inline void JSONFormatAndAddMACAddr(
-        JsonBuilder *js, const char *key, const uint8_t *val, bool is_array)
+void JSONFormatAndAddMACAddr(JsonBuilder *js, const char *key, const uint8_t *val, bool is_array)
 {
     char eth_addr[19];
     (void) snprintf(eth_addr, 19, "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -743,14 +736,43 @@ static int MacSetIterateToJSON(uint8_t *val, MacSetSide side, void *data)
     return 0;
 }
 
-static int CreateJSONEther(JsonBuilder *js, const Packet *p, const Flow *f)
+static int CreateJSONEther(
+        JsonBuilder *js, const Packet *p, const Flow *f, enum OutputJsonLogDirection dir)
 {
     if (p != NULL) {
         /* this is a packet context, so we need to add scalar fields */
-        if (p->ethh != NULL) {
+        if (PacketIsEthernet(p)) {
+            const EthernetHdr *ethh = PacketGetEthernet(p);
             jb_open_object(js, "ether");
-            uint8_t *src = p->ethh->eth_src;
-            uint8_t *dst = p->ethh->eth_dst;
+            const uint8_t *src;
+            const uint8_t *dst;
+            switch (dir) {
+                case LOG_DIR_FLOW_TOSERVER:
+                    // fallthrough
+                case LOG_DIR_FLOW:
+                    if (PKT_IS_TOCLIENT(p)) {
+                        src = ethh->eth_dst;
+                        dst = ethh->eth_src;
+                    } else {
+                        src = ethh->eth_src;
+                        dst = ethh->eth_dst;
+                    }
+                    break;
+                case LOG_DIR_FLOW_TOCLIENT:
+                    if (PKT_IS_TOSERVER(p)) {
+                        src = ethh->eth_dst;
+                        dst = ethh->eth_src;
+                    } else {
+                        src = ethh->eth_src;
+                        dst = ethh->eth_dst;
+                    }
+                    break;
+                case LOG_DIR_PACKET:
+                default:
+                    src = ethh->eth_src;
+                    dst = ethh->eth_dst;
+                    break;
+            }
             JSONFormatAndAddMACAddr(js, "src_mac", src, false);
             JSONFormatAndAddMACAddr(js, "dest_mac", dst, false);
             jb_close(js);
@@ -774,8 +796,15 @@ static int CreateJSONEther(JsonBuilder *js, const Packet *p, const Flow *f)
             }
             jb_close(info.dst);
             jb_close(info.src);
-            jb_set_object(js, "dest_macs", info.dst);
-            jb_set_object(js, "src_macs", info.src);
+            /* case is handling netflow too so may need to revert */
+            if (dir == LOG_DIR_FLOW_TOCLIENT) {
+                jb_set_object(js, "dest_macs", info.src);
+                jb_set_object(js, "src_macs", info.dst);
+            } else {
+                DEBUG_VALIDATE_BUG_ON(dir != LOG_DIR_FLOW_TOSERVER && dir != LOG_DIR_FLOW);
+                jb_set_object(js, "dest_macs", info.dst);
+                jb_set_object(js, "src_macs", info.src);
+            }
             jb_free(info.dst);
             jb_free(info.src);
             jb_close(js);
@@ -839,24 +868,34 @@ JsonBuilder *CreateEveHeader(const Packet *p, enum OutputJsonLogDirection dir,
         JsonAddrInfoInit(p, dir, &addr_info);
         addr = &addr_info;
     }
-    jb_set_string(js, "src_ip", addr->src_ip);
-    jb_set_uint(js, "src_port", addr->sp);
-    jb_set_string(js, "dest_ip", addr->dst_ip);
-    jb_set_uint(js, "dest_port", addr->dp);
-    jb_set_string(js, "proto", addr->proto);
+    if (addr->src_ip[0] != '\0') {
+        jb_set_string(js, "src_ip", addr->src_ip);
+    }
+    if (addr->log_port) {
+        jb_set_uint(js, "src_port", addr->sp);
+    }
+    if (addr->dst_ip[0] != '\0') {
+        jb_set_string(js, "dest_ip", addr->dst_ip);
+    }
+    if (addr->log_port) {
+        jb_set_uint(js, "dest_port", addr->dp);
+    }
+    if (addr->proto[0] != '\0') {
+        jb_set_string(js, "proto", addr->proto);
+    }
 
     /* icmp */
     switch (p->proto) {
         case IPPROTO_ICMP:
-            if (p->icmpv4h) {
-                jb_set_uint(js, "icmp_type", p->icmpv4h->type);
-                jb_set_uint(js, "icmp_code", p->icmpv4h->code);
+            if (PacketIsICMPv4(p)) {
+                jb_set_uint(js, "icmp_type", p->icmp_s.type);
+                jb_set_uint(js, "icmp_code", p->icmp_s.code);
             }
             break;
         case IPPROTO_ICMPV6:
-            if (p->icmpv6h) {
-                jb_set_uint(js, "icmp_type", p->icmpv6h->type);
-                jb_set_uint(js, "icmp_code", p->icmpv6h->code);
+            if (PacketIsICMPv6(p)) {
+                jb_set_uint(js, "icmp_type", PacketGetICMPv6(p)->type);
+                jb_set_uint(js, "icmp_code", PacketGetICMPv6(p)->code);
             }
             break;
     }
@@ -864,7 +903,7 @@ JsonBuilder *CreateEveHeader(const Packet *p, enum OutputJsonLogDirection dir,
     jb_set_string(js, "pkt_src", PktSrcToString(p->pkt_src));
 
     if (eve_ctx != NULL) {
-        EveAddCommonOptions(&eve_ctx->cfg, p, f, js);
+        EveAddCommonOptions(&eve_ctx->cfg, p, f, js, dir);
     }
 
     return js;
@@ -1178,8 +1217,7 @@ OutputInitResult OutputJsonInitCtx(ConfNode *conf)
         const char *pcapfile_s = ConfNodeLookupChildValue(conf, "pcap-file");
         if (pcapfile_s != NULL && ConfValIsTrue(pcapfile_s)) {
             json_ctx->file_ctx->is_pcap_offline =
-                (RunmodeGetCurrent() == RUNMODE_PCAP_FILE ||
-                 RunmodeGetCurrent() == RUNMODE_UNIX_SOCKET);
+                    (SCRunmodeGet() == RUNMODE_PCAP_FILE || SCRunmodeGet() == RUNMODE_UNIX_SOCKET);
         }
         json_ctx->file_ctx->type = log_filetype;
     }

@@ -19,6 +19,7 @@ Automatic Protocol Detection
    -  dns
    -  http
    -  imap (detection only by default; no parsing)
+   -  pop3 (detection only by default; no parsing)
    -  ftp
    -  modbus (disabled by default; minimalist probe parser; can lead to false positives)
    -  smb
@@ -524,7 +525,7 @@ File Extraction
 Lua Scripting
 -------------
 
--  Suricata has the ``lua`` (or ``luajit``) keyword which allows for a
+-  Suricata has the ``lua`` keyword which allows for a
    rule to reference a Lua script that can access the packet, payload,
    HTTP buffers, etc.
 -  Provides powerful flexibility and capabilities that Snort does

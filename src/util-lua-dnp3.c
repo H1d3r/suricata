@@ -20,11 +20,9 @@
 #include "app-layer-dnp3.h"
 #include "app-layer-dnp3-objects.h"
 
-#ifdef HAVE_LUA
-
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
+#include "lua.h"
+#include "lualib.h"
+#include "lauxlib.h"
 
 #include "util-lua.h"
 #include "util-lua-common.h"
@@ -197,5 +195,3 @@ int LuaRegisterDNP3Functions(lua_State *luastate)
 
     return 0;
 }
-
-#endif /* HAVE_LUA */

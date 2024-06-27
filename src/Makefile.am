@@ -3,7 +3,7 @@ if BUILD_FUZZTARGETS
     bin_PROGRAMS += fuzz_applayerprotodetectgetproto \
     fuzz_applayerparserparse fuzz_siginit \
     fuzz_confyamlloadstring fuzz_decodepcapfile \
-    fuzz_sigpcap fuzz_mimedecparseline
+    fuzz_sigpcap fuzz_mimedecparseline fuzz_decodebase64
 if HAS_FUZZPCAP
     bin_PROGRAMS += fuzz_sigpcap_aware fuzz_predefpcap_aware
 endif
@@ -17,8 +17,6 @@ noinst_HEADERS = \
 	app-layer-detect-proto.h \
 	app-layer-dnp3.h \
 	app-layer-dnp3-objects.h \
-	app-layer-enip-common.h \
-	app-layer-enip.h \
 	app-layer-events.h \
 	app-layer-expectation.h \
 	app-layer-frames.h \
@@ -33,21 +31,15 @@ noinst_HEADERS = \
 	app-layer-htp-xff.h \
 	app-layer-http2.h \
 	app-layer-ike.h \
-	app-layer-krb5.h \
 	app-layer-modbus.h \
-	app-layer-quic.h \
 	app-layer-nfs-tcp.h \
 	app-layer-nfs-udp.h \
-	app-layer-ntp.h \
 	app-layer-parser.h \
 	app-layer-protos.h \
-	app-layer-rdp.h \
 	app-layer-register.h \
 	app-layer-rfb.h \
-	app-layer-sip.h \
 	app-layer-smb.h \
 	app-layer-smtp.h \
-	app-layer-snmp.h \
 	app-layer-ssh.h \
 	app-layer-ssl.h \
 	app-layer-tftp.h \
@@ -62,6 +54,7 @@ noinst_HEADERS = \
 	datasets-reputation.h \
 	datasets-sha256.h \
 	datasets-string.h \
+	decode-arp.h \
 	decode-chdlc.h \
 	decode-erspan.h \
 	decode-esp.h \
@@ -91,7 +84,7 @@ noinst_HEADERS = \
 	defrag-config.h \
 	defrag.h \
 	defrag-hash.h \
-	defrag-queue.h \
+	defrag-stack.h \
 	defrag-timeout.h \
 	detect-app-layer-event.h \
 	detect-app-layer-protocol.h \
@@ -105,7 +98,6 @@ noinst_HEADERS = \
 	detect-bytejump.h \
 	detect-bytemath.h \
 	detect-bytetest.h \
-	detect-cipservice.h \
 	detect-classtype.h \
 	detect-config.h \
 	detect-content.h \
@@ -134,11 +126,11 @@ noinst_HEADERS = \
 	detect-engine-build.h \
 	detect-engine-content-inspection.h \
 	detect-engine-dcepayload.h \
-	detect-engine-enip.h \
 	detect-engine-event.h \
 	detect-engine-file.h \
 	detect-engine-frame.h \
 	detect-engine.h \
+	detect-engine-helper.h \
 	detect-engine-iponly.h \
 	detect-engine-loader.h \
 	detect-engine-mpm.h \
@@ -299,13 +291,6 @@ noinst_HEADERS = \
 	detect-smb-ntlmssp.h \
 	detect-smb-share.h \
 	detect-smb-version.h \
-	detect-snmp-community.h \
-	detect-snmp-pdu_type.h \
-	detect-snmp-usm.h \
-	detect-snmp-version.h \
-	detect-dhcp-leasetime.h \
-	detect-dhcp-rebinding-time.h \
-	detect-dhcp-renewal-time.h \
 	detect-ssh-hassh.h \
 	detect-ssh-hassh-server.h \
 	detect-ssh-hassh-server-string.h \
@@ -329,12 +314,14 @@ noinst_HEADERS = \
 	detect-template.h \
 	detect-template-rust-buffer.h \
 	detect-threshold.h \
+	detect-tls-alpn.h \
 	detect-tls-cert-fingerprint.h \
 	detect-tls-cert-issuer.h \
 	detect-tls-cert-serial.h \
 	detect-tls-certs.h \
 	detect-tls-cert-subject.h \
 	detect-tls-cert-validity.h \
+	detect-tls-subjectaltname.h \
 	detect-tls.h \
 	detect-tls-ja3-hash.h \
 	detect-tls-ja3s-hash.h \
@@ -344,6 +331,7 @@ noinst_HEADERS = \
 	detect-tls-version.h \
 	detect-tls-random.h \
 	detect-tos.h \
+	detect-transform-base64.h \
 	detect-transform-casechange.h \
 	detect-transform-compress-whitespace.h \
 	detect-transform-dotprefix.h \
@@ -362,7 +350,6 @@ noinst_HEADERS = \
 	detect-urilen.h \
 	detect-within.h \
 	detect-xbits.h \
-	detect-websocket.h \
 	device-storage.h \
 	feature.h \
 	flow-bit.h \
@@ -405,6 +392,7 @@ noinst_HEADERS = \
 	output.h \
 	output-json-alert.h \
 	output-json-anomaly.h \
+	output-json-arp.h \
 	output-json-dcerpc.h \
 	output-json-dhcp.h \
 	output-json-dnp3.h \
@@ -524,7 +512,6 @@ noinst_HEADERS = \
 	util-datalink.h \
 	util-debug-filters.h \
 	util-debug.h \
-	util-decode-mime.h \
 	util-detect.h \
 	util-device.h \
 	util-dpdk.h \
@@ -565,7 +552,7 @@ noinst_HEADERS = \
 	util-lua-hassh.h \
 	util-lua-http.h \
 	util-lua-ja3.h \
-	util-luajit.h \
+	util-lua-sandbox.h \
 	util-lua-smtp.h \
 	util-lua-ssh.h \
 	util-lua-tls.h \
@@ -634,8 +621,6 @@ libsuricata_c_a_SOURCES = \
 	app-layer-detect-proto.c \
 	app-layer-dnp3.c \
 	app-layer-dnp3-objects.c \
-	app-layer-enip.c \
-	app-layer-enip-common.c \
 	app-layer-events.c \
 	app-layer-expectation.c \
 	app-layer-ftp.c \
@@ -649,21 +634,15 @@ libsuricata_c_a_SOURCES = \
 	app-layer-htp-xff.c \
 	app-layer-http2.c \
 	app-layer-ike.c \
-	app-layer-krb5.c \
 	app-layer-modbus.c \
-	app-layer-quic.c \
 	app-layer-nfs-tcp.c \
 	app-layer-nfs-udp.c \
-	app-layer-ntp.c \
 	app-layer-parser.c \
 	app-layer-protos.c \
-	app-layer-rdp.c \
 	app-layer-register.c \
 	app-layer-rfb.c \
-	app-layer-sip.c \
 	app-layer-smb.c \
 	app-layer-smtp.c \
-	app-layer-snmp.c \
 	app-layer-ssh.c \
 	app-layer-ssl.c \
 	app-layer-tftp.c \
@@ -677,6 +656,7 @@ libsuricata_c_a_SOURCES = \
 	datasets-sha256.c \
 	datasets-string.c \
 	decode.c \
+	decode-arp.c \
 	decode-chdlc.c \
 	decode-erspan.c \
 	decode-esp.c \
@@ -706,7 +686,7 @@ libsuricata_c_a_SOURCES = \
 	defrag.c \
 	defrag-config.c \
 	defrag-hash.c \
-	defrag-queue.c \
+	defrag-stack.c \
 	defrag-timeout.c \
 	detect-app-layer-event.c \
 	detect-app-layer-protocol.c \
@@ -721,7 +701,6 @@ libsuricata_c_a_SOURCES = \
 	detect-bytemath.c \
 	detect-bytetest.c \
 	detect.c \
-	detect-cipservice.c \
 	detect-classtype.c \
 	detect-config.c \
 	detect-content.c \
@@ -751,10 +730,10 @@ libsuricata_c_a_SOURCES = \
 	detect-engine.c \
 	detect-engine-content-inspection.c \
 	detect-engine-dcepayload.c \
-	detect-engine-enip.c \
 	detect-engine-event.c \
 	detect-engine-file.c \
 	detect-engine-frame.c \
+	detect-engine-helper.c \
 	detect-engine-iponly.c \
 	detect-engine-loader.c \
 	detect-engine-mpm.c \
@@ -913,13 +892,6 @@ libsuricata_c_a_SOURCES = \
 	detect-smb-ntlmssp.c \
 	detect-smb-share.c \
 	detect-smb-version.c \
-	detect-snmp-community.c \
-	detect-snmp-pdu_type.c \
-	detect-snmp-usm.c \
-	detect-snmp-version.c \
-	detect-dhcp-leasetime.c \
-	detect-dhcp-rebinding-time.c \
-	detect-dhcp-renewal-time.c \
 	detect-ssh-hassh.c \
 	detect-ssh-hassh-server.c \
 	detect-ssh-hassh-server-string.c \
@@ -944,12 +916,14 @@ libsuricata_c_a_SOURCES = \
 	detect-template-rust-buffer.c \
 	detect-threshold.c \
 	detect-tls.c \
+	detect-tls-alpn.c \
 	detect-tls-cert-fingerprint.c \
 	detect-tls-cert-issuer.c \
 	detect-tls-certs.c \
 	detect-tls-cert-serial.c \
 	detect-tls-cert-subject.c \
 	detect-tls-cert-validity.c \
+	detect-tls-subjectaltname.c \
 	detect-tls-ja3-hash.c \
 	detect-tls-ja3s-hash.c \
 	detect-tls-ja3s-string.c \
@@ -958,6 +932,7 @@ libsuricata_c_a_SOURCES = \
 	detect-tls-version.c \
 	detect-tls-random.c \
 	detect-tos.c \
+	detect-transform-base64.c \
 	detect-transform-casechange.c \
 	detect-transform-compress-whitespace.c \
 	detect-transform-dotprefix.c \
@@ -976,7 +951,6 @@ libsuricata_c_a_SOURCES = \
 	detect-urilen.c \
 	detect-within.c \
 	detect-xbits.c \
-	detect-websocket.c \
 	device-storage.c \
 	feature.c \
 	flow-bit.c \
@@ -1016,6 +990,7 @@ libsuricata_c_a_SOURCES = \
 	output-flow.c \
 	output-json-alert.c \
 	output-json-anomaly.c \
+	output-json-arp.c \
 	output-json.c \
 	output-json-common.c \
 	output-json-dcerpc.c \
@@ -1123,7 +1098,6 @@ libsuricata_c_a_SOURCES = \
 	util-datalink.c \
 	util-debug.c \
 	util-debug-filters.c \
-	util-decode-mime.c \
 	util-detect.c \
 	util-device.c \
 	util-dpdk.c \
@@ -1162,7 +1136,7 @@ libsuricata_c_a_SOURCES = \
 	util-lua-hassh.c \
 	util-lua-http.c \
 	util-lua-ja3.c \
-	util-luajit.c \
+	util-lua-sandbox.c \
 	util-lua-smtp.c \
 	util-lua-ssh.c \
 	util-lua-tls.c \
@@ -1239,8 +1213,6 @@ EXTRA_DIST = \
 	tests/detect-http2.c \
 	tests/detect-icmpv6-mtu.c \
 	tests/detect-icmpv6hdr.c \
-	tests/detect-snmp-pdu_type.c \
-	tests/detect-snmp-version.c \
 	tests/detect-template.c \
 	tests/detect-transform-pcrexform.c \
 	tests/detect-transform-xor.c \
@@ -1264,7 +1236,6 @@ EXTRA_DIST = \
 	tests/detect-http-stat-msg.c \
 	tests/detect-http-uri.c \
 	tests/detect-http-user-agent.c \
-	tests/detect-snmp-community.c \
 	tests/detect-ssl-state.c \
 	tests/detect-ssl-version.c \
 	tests/detect-template-buffer.c \
@@ -1299,7 +1270,13 @@ suricata_SOURCES = main.c
 
 # the library search path.
 suricata_LDFLAGS = $(all_libraries) ${SECLDFLAGS}
-suricata_LDADD = libsuricata_c.a $(RUST_SURICATA_LIB) $(HTP_LDADD) $(RUST_LDADD)
+# rust library depends also on c
+if LINKER_SUPPORTS_GROUP
+LDADD_GENERIC = "-Wl,--start-group,libsuricata_c.a,$(RUST_SURICATA_LIB),--end-group" $(HTP_LDADD) $(RUST_LDADD)
+else
+LDADD_GENERIC = libsuricata_c.a $(RUST_SURICATA_LIB) libsuricata_c.a $(RUST_SURICATA_LIB) $(HTP_LDADD) $(RUST_LDADD)
+endif
+suricata_LDADD = $(LDADD_GENERIC)
 suricata_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 
 if BUILD_SHARED_LIBRARY
@@ -1335,11 +1312,12 @@ uninstall-local:
 if BUILD_FUZZTARGETS
 
 LDFLAGS_FUZZ = $(all_libraries) $(SECLDFLAGS)
-LDADD_FUZZ = libsuricata_c.a $(RUST_SURICATA_LIB) $(HTP_LDADD) $(RUST_LDADD)
+LDADD_FUZZ = $(LDADD_GENERIC)
 
 fuzz_applayerprotodetectgetproto_SOURCES = tests/fuzz/fuzz_applayerprotodetectgetproto.c
 fuzz_applayerprotodetectgetproto_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_applayerprotodetectgetproto_LDADD = $(LDADD_FUZZ)
+fuzz_applayerprotodetectgetproto_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_applayerprotodetectgetproto_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1351,6 +1329,7 @@ nodist_EXTRA_fuzz_applayerprotodetectgetproto_SOURCES = force-cxx-linking.cxx
 fuzz_applayerparserparse_SOURCES = tests/fuzz/fuzz_applayerparserparse.c
 fuzz_applayerparserparse_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_applayerparserparse_LDADD = $(LDADD_FUZZ)
+fuzz_applayerparserparse_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_applayerparserparse_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1362,6 +1341,7 @@ nodist_EXTRA_fuzz_applayerparserparse_SOURCES = force-cxx-linking.cxx
 fuzz_siginit_SOURCES = tests/fuzz/fuzz_siginit.c
 fuzz_siginit_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_siginit_LDADD = $(LDADD_FUZZ)
+fuzz_siginit_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_siginit_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1373,6 +1353,7 @@ nodist_EXTRA_fuzz_siginit_SOURCES = force-cxx-linking.cxx
 fuzz_confyamlloadstring_SOURCES = tests/fuzz/fuzz_confyamlloadstring.c
 fuzz_confyamlloadstring_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_confyamlloadstring_LDADD = $(LDADD_FUZZ)
+fuzz_confyamlloadstring_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_confyamlloadstring_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1384,6 +1365,7 @@ nodist_EXTRA_fuzz_confyamlloadstring_SOURCES = force-cxx-linking.cxx
 fuzz_decodepcapfile_SOURCES = tests/fuzz/fuzz_decodepcapfile.c
 fuzz_decodepcapfile_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_decodepcapfile_LDADD = $(LDADD_FUZZ)
+fuzz_decodepcapfile_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_decodepcapfile_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1395,6 +1377,7 @@ nodist_EXTRA_fuzz_decodepcapfile_SOURCES = force-cxx-linking.cxx
 fuzz_sigpcap_SOURCES = tests/fuzz/fuzz_sigpcap.c
 fuzz_sigpcap_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_sigpcap_LDADD = $(LDADD_FUZZ)
+fuzz_sigpcap_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_sigpcap_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1407,6 +1390,7 @@ if HAS_FUZZPCAP
 fuzz_sigpcap_aware_SOURCES = tests/fuzz/fuzz_sigpcap_aware.c
 fuzz_sigpcap_aware_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_sigpcap_aware_LDADD = $(LDADD_FUZZ) -lfuzzpcap
+fuzz_sigpcap_aware_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_sigpcap_aware_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1418,6 +1402,7 @@ nodist_EXTRA_fuzz_sigpcap_aware_SOURCES = force-cxx-linking.cxx
 fuzz_predefpcap_aware_SOURCES = tests/fuzz/fuzz_predefpcap_aware.c
 fuzz_predefpcap_aware_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_predefpcap_aware_LDADD = $(LDADD_FUZZ) -lfuzzpcap
+fuzz_predefpcap_aware_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_predefpcap_aware_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else
@@ -1427,9 +1412,22 @@ endif
 nodist_EXTRA_fuzz_predefpcap_aware_SOURCES = force-cxx-linking.cxx
 endif
 
+fuzz_decodebase64_SOURCES = tests/fuzz/fuzz_decodebase64.c
+fuzz_decodebase64_LDFLAGS = $(LDFLAGS_FUZZ)
+fuzz_decodebase64_LDADD = $(LDADD_FUZZ)
+fuzz_decodebase64_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
+if HAS_FUZZLDFLAGS
+    fuzz_decodebase64_LDFLAGS += $(LIB_FUZZING_ENGINE)
+else
+    fuzz_decodebase64_SOURCES += tests/fuzz/onefile.c
+endif
+# force usage of CXX for linker
+nodist_EXTRA_fuzz_decodebase64_SOURCES = force-cxx-linking.cxx
+
 fuzz_mimedecparseline_SOURCES = tests/fuzz/fuzz_mimedecparseline.c
 fuzz_mimedecparseline_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_mimedecparseline_LDADD = $(LDADD_FUZZ)
+fuzz_mimedecparseline_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
 if HAS_FUZZLDFLAGS
     fuzz_mimedecparseline_LDFLAGS += $(LIB_FUZZING_ENGINE)
 else

@@ -397,7 +397,7 @@ typedef unsigned char u_char;
 
 #define BIT_U8(n)  ((uint8_t)(1 << (n)))
 #define BIT_U16(n) ((uint16_t)(1 << (n)))
-#define BIT_U32(n) (1UL  << (n))
+#define BIT_U32(n) ((uint32_t)(1UL << (n)))
 #define BIT_U64(n) (1ULL << (n))
 
 #define WARN_UNUSED __attribute__((warn_unused_result))
@@ -463,6 +463,7 @@ typedef enum {
     /* TX loggers first for low logger IDs */
     LOGGER_HTTP,
     LOGGER_TLS_STORE,
+    LOGGER_TLS_STORE_CLIENT,
     LOGGER_TLS,
     LOGGER_JSON_TX,
     LOGGER_FILE,
@@ -491,21 +492,12 @@ typedef enum {
     LOGGER_JSON_FRAME,
     LOGGER_JSON_STREAM,
     LOGGER_SIZE,
+    LOGGER_JSON_ARP,
 } LoggerId;
-
-#ifndef HAVE_LUA
 
 /* If we don't have Lua, create a typedef for lua_State so the
  * exported Lua functions don't fail the build. */
-typedef void lua_State;
-
-#else
-
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
-
-#endif
+typedef struct lua_State lua_State;
 
 #include "tm-threads-common.h"
 #include "util-optimize.h"

@@ -223,7 +223,7 @@ const SigGroupHead *SigMatchSignaturesGetSgh(const DetectEngineCtx *de_ctx,
     if (p->proto == 0 && p->events.cnt > 0) {
         SCReturnPtr(de_ctx->decoder_event_sgh, "SigGroupHead");
     } else if (p->proto == 0) {
-        if (!(PKT_IS_IPV4(p) || PKT_IS_IPV6(p))) {
+        if (!(PacketIsIPv4(p) || PacketIsIPv6(p))) {
             /* not IP, so nothing to do */
             SCReturnPtr(NULL, "SigGroupHead");
         }
@@ -232,7 +232,7 @@ const SigGroupHead *SigMatchSignaturesGetSgh(const DetectEngineCtx *de_ctx,
     /* select the flow_gh */
     const int dir = (p->flowflags & FLOW_PKT_TOCLIENT) == 0;
 
-    int proto = IP_GET_IPPROTO(p);
+    int proto = PacketGetIPProto(p);
     if (proto == IPPROTO_TCP) {
         DetectPort *list = de_ctx->flow_gh[dir].tcp;
         SCLogDebug("tcp toserver %p, tcp toclient %p: going to use %p", de_ctx->flow_gh[1].tcp,
@@ -407,7 +407,7 @@ static inline void DetectPrefilterBuildNonPrefilterList(
 static inline void
 DetectPrefilterSetNonPrefilterList(const Packet *p, DetectEngineThreadCtx *det_ctx, DetectRunScratchpad *scratch)
 {
-    if ((p->proto == IPPROTO_TCP) && (p->tcph != NULL) && (p->tcph->th_flags & TH_SYN)) {
+    if ((p->proto == IPPROTO_TCP) && PacketIsTCP(p) && (PacketGetTCP(p)->th_flags & TH_SYN)) {
         det_ctx->non_pf_store_ptr = scratch->sgh->non_pf_syn_store_array;
         det_ctx->non_pf_store_cnt = scratch->sgh->non_pf_syn_store_cnt;
     } else {
@@ -513,7 +513,7 @@ static inline void DetectRunGetRuleGroup(
         bool use_flow_sgh = false;
         /* Get the stored sgh from the flow (if any). Make sure we're not using
          * the sgh for icmp error packets part of the same stream. */
-        if (IP_GET_IPPROTO(p) == pflow->proto) { /* filter out icmp */
+        if (PacketGetIPProto(p) == pflow->proto) { /* filter out icmp */
             PACKET_PROFILING_DETECT_START(p, PROF_DETECT_GETSGH);
             if ((p->flowflags & FLOW_PKT_TOSERVER) && (pflow->flags & FLOW_SGH_TOSERVER)) {
                 sgh = pflow->sgh_toserver;
@@ -534,7 +534,7 @@ static inline void DetectRunGetRuleGroup(
 
             /* HACK: prevent the wrong sgh (or NULL) from being stored in the
              * flow's sgh pointers */
-            if (PKT_IS_ICMPV4(p) && ICMPV4_DEST_UNREACH_IS_VALID(p)) {
+            if (PacketIsICMPv4(p) && ICMPV4_DEST_UNREACH_IS_VALID(p)) {
                 ; /* no-op */
             } else {
                 /* store the found sgh (or NULL) in the flow to save us
@@ -608,16 +608,16 @@ static inline bool DetectRunInspectRuleHeader(const Packet *p, const Flow *f, co
         }
     }
 
-    if ((s_proto_flags & DETECT_PROTO_IPV4) && !PKT_IS_IPV4(p)) {
+    if ((s_proto_flags & DETECT_PROTO_IPV4) && !PacketIsIPv4(p)) {
         SCLogDebug("ip version didn't match");
         return false;
     }
-    if ((s_proto_flags & DETECT_PROTO_IPV6) && !PKT_IS_IPV6(p)) {
+    if ((s_proto_flags & DETECT_PROTO_IPV6) && !PacketIsIPv6(p)) {
         SCLogDebug("ip version didn't match");
         return false;
     }
 
-    if (DetectProtoContainsProto(&s->proto, IP_GET_IPPROTO(p)) == 0) {
+    if (DetectProtoContainsProto(&s->proto, PacketGetIPProto(p)) == 0) {
         SCLogDebug("proto didn't match");
         return false;
     }
@@ -649,20 +649,20 @@ static inline bool DetectRunInspectRuleHeader(const Packet *p, const Flow *f, co
 
     /* check the destination address */
     if (!(sflags & SIG_FLAG_DST_ANY)) {
-        if (PKT_IS_IPV4(p)) {
+        if (PacketIsIPv4(p)) {
             if (DetectAddressMatchIPv4(s->addr_dst_match4, s->addr_dst_match4_cnt, &p->dst) == 0)
                 return false;
-        } else if (PKT_IS_IPV6(p)) {
+        } else if (PacketIsIPv6(p)) {
             if (DetectAddressMatchIPv6(s->addr_dst_match6, s->addr_dst_match6_cnt, &p->dst) == 0)
                 return false;
         }
     }
     /* check the source address */
     if (!(sflags & SIG_FLAG_SRC_ANY)) {
-        if (PKT_IS_IPV4(p)) {
+        if (PacketIsIPv4(p)) {
             if (DetectAddressMatchIPv4(s->addr_src_match4, s->addr_src_match4_cnt, &p->src) == 0)
                 return false;
-        } else if (PKT_IS_IPV6(p)) {
+        } else if (PacketIsIPv6(p)) {
             if (DetectAddressMatchIPv6(s->addr_src_match6, s->addr_src_match6_cnt, &p->src) == 0)
                 return false;
         }
@@ -696,7 +696,7 @@ static inline void DetectRunPrefilterPkt(
     PACKET_PROFILING_DETECT_END(p, PROF_DETECT_NONMPMLIST);
 
     /* run the prefilter engines */
-    Prefilter(det_ctx, scratch->sgh, p, scratch->flow_flags);
+    Prefilter(det_ctx, scratch->sgh, p, scratch->flow_flags, scratch->pkt_mask);
     /* create match list if we have non-pf and/or pf */
     if (det_ctx->non_pf_store_cnt || det_ctx->pmq.rule_id_array_cnt) {
 #ifdef PROFILING
@@ -825,8 +825,6 @@ next:
         DetectVarProcessList(det_ctx, pflow, p);
         DetectReplaceFree(det_ctx);
         RULE_PROFILING_END(det_ctx, s, smatch, p);
-
-        det_ctx->flags = 0;
         continue;
     }
 }
@@ -1627,6 +1625,15 @@ static void DetectRunFrames(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngin
     const SigGroupHead *const sgh = scratch->sgh;
     const AppProto alproto = f->alproto;
 
+    /* for TCP, limit inspection to pseudo packets or real packet that did
+     * an app-layer update. */
+    if (p->proto == IPPROTO_TCP && !PKT_IS_PSEUDOPKT(p) &&
+            ((PKT_IS_TOSERVER(p) && (f->flags & FLOW_TS_APP_UPDATED) == 0) ||
+                    (PKT_IS_TOCLIENT(p) && (f->flags & FLOW_TC_APP_UPDATED) == 0))) {
+        SCLogDebug("pcap_cnt %" PRIu64 ": %s: skip frame inspection for TCP w/o APP UPDATE",
+                p->pcap_cnt, PKT_IS_TOSERVER(p) ? "toserver" : "toclient");
+        return;
+    }
     FramesContainer *frames_container = AppLayerFramesGetContainer(f);
     if (frames_container == NULL) {
         return;
@@ -1721,12 +1728,13 @@ static void DetectRunFrames(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngin
                     /* match */
                     DetectRunPostMatch(tv, det_ctx, p, s);
 
-                    const uint8_t alert_flags =
-                            (PACKET_ALERT_FLAG_STATE_MATCH | PACKET_ALERT_FLAG_FRAME);
-                    det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_FRAME_ID_SET;
+                    uint8_t alert_flags = (PACKET_ALERT_FLAG_STATE_MATCH | PACKET_ALERT_FLAG_FRAME);
                     det_ctx->frame_id = frame->id;
                     SCLogDebug(
                             "%p/%" PRIi64 " sig %u (%u) matched", frame, frame->id, s->id, s->num);
+                    if (frame->flags & FRAME_FLAG_TX_ID_SET) {
+                        alert_flags |= PACKET_ALERT_FLAG_TX;
+                    }
                     AlertQueueAppend(det_ctx, s, p, frame->tx_id, alert_flags);
                 }
             }
@@ -1804,7 +1812,6 @@ static void DetectNoFlow(ThreadVars *tv,
 
     /* see if the packet matches one or more of the sigs */
     DetectRun(tv, de_ctx, det_ctx, p);
-    return;
 }
 
 /** \brief Detection engine thread wrapper.
@@ -1912,4 +1919,3 @@ void SigMatchSignatures(
 #ifdef UNITTESTS
 #include "tests/detect.c"
 #endif
-

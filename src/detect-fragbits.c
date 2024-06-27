@@ -142,16 +142,18 @@ FragBitsMatch(const uint8_t pbits, const uint8_t modifier,
 static int DetectFragBitsMatch (DetectEngineThreadCtx *det_ctx,
         Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
-    if (!ctx || !PKT_IS_IPV4(p) || PKT_IS_PSEUDOPKT(p))
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
+    if (!ctx || !PacketIsIPv4(p))
         return 0;
 
     uint8_t fragbits = 0;
     const DetectFragBitsData *de = (const DetectFragBitsData *)ctx;
-    if(IPV4_GET_MF(p))
+    const IPV4Hdr *ip4h = PacketGetIPv4(p);
+    if (IPV4_GET_RAW_FLAG_MF(ip4h))
         fragbits |= FRAGBITS_HAVE_MF;
-    if(IPV4_GET_DF(p))
+    if (IPV4_GET_RAW_FLAG_DF(ip4h))
         fragbits |= FRAGBITS_HAVE_DF;
-    if(IPV4_GET_RF(p))
+    if (IPV4_GET_RAW_FLAG_RF(ip4h))
         fragbits |= FRAGBITS_HAVE_RF;
 
     return FragBitsMatch(fragbits, de->modifier, de->fragbits);
@@ -319,17 +321,19 @@ static void DetectFragBitsFree(DetectEngineCtx *de_ctx, void *de_ptr)
 static void
 PrefilterPacketFragBitsMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
 {
+    DEBUG_VALIDATE_BUG_ON(PKT_IS_PSEUDOPKT(p));
     const PrefilterPacketHeaderCtx *ctx = pectx;
 
-    if (!PKT_IS_IPV4(p) || PKT_IS_PSEUDOPKT(p))
+    if (!PacketIsIPv4(p))
         return;
 
     uint8_t fragbits = 0;
-    if (IPV4_GET_MF(p))
+    const IPV4Hdr *ip4h = PacketGetIPv4(p);
+    if (IPV4_GET_RAW_FLAG_MF(ip4h))
         fragbits |= FRAGBITS_HAVE_MF;
-    if (IPV4_GET_DF(p))
+    if (IPV4_GET_RAW_FLAG_DF(ip4h))
         fragbits |= FRAGBITS_HAVE_DF;
-    if (IPV4_GET_RF(p))
+    if (IPV4_GET_RAW_FLAG_RF(ip4h))
         fragbits |= FRAGBITS_HAVE_RF;
 
     if (FragBitsMatch(fragbits, ctx->v1.u8[0], ctx->v1.u8[1]))
@@ -360,10 +364,9 @@ PrefilterPacketFragBitsCompare(PrefilterPacketHeaderValue v, void *smctx)
 
 static int PrefilterSetupFragBits(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_FRAGBITS,
-        PrefilterPacketFragBitsSet,
-        PrefilterPacketFragBitsCompare,
-        PrefilterPacketFragBitsMatch);
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_FRAGBITS, SIG_MASK_REQUIRE_REAL_PKT,
+            PrefilterPacketFragBitsSet, PrefilterPacketFragBitsCompare,
+            PrefilterPacketFragBitsMatch);
 }
 
 static bool PrefilterFragBitsIsPrefilterable(const Signature *s)
@@ -478,7 +481,7 @@ static int FragBitsTestParse03 (void)
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&dtv, 0, sizeof(DecodeThreadVars));
-    dtv.app_tctx = AppLayerGetCtxThread(&tv);
+    dtv.app_tctx = AppLayerGetCtxThread();
 
     FlowInitConfig(FLOW_QUIET);
 
@@ -560,7 +563,7 @@ static int FragBitsTestParse04 (void)
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&dtv, 0, sizeof(DecodeThreadVars));
-    dtv.app_tctx = AppLayerGetCtxThread(&tv);
+    dtv.app_tctx = AppLayerGetCtxThread();
 
     FlowInitConfig(FLOW_QUIET);
 

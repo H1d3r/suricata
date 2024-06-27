@@ -34,7 +34,6 @@
 
 #include "util-print.h"
 #include "util-unittest.h"
-#include "util-luajit.h"
 
 #include "util-debug.h"
 
@@ -48,22 +47,17 @@
 #include "util-logopenfile.h"
 #include "util-time.h"
 
-#ifdef HAVE_LUA
-
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
+#include "lua.h"
+#include "lualib.h"
+#include "lauxlib.h"
 
 #include "util-lua.h"
+#include "util-lua-sandbox.h"
 
 lua_State *LuaGetState(void)
 {
     lua_State *s = NULL;
-#ifdef HAVE_LUAJIT
-    s = LuajitGetState();
-#else
     s = luaL_newstate();
-#endif
     return s;
 }
 
@@ -74,11 +68,7 @@ void LuaReturnState(lua_State *s)
         while (lua_gettop(s) > 0) {
             lua_pop(s, 1);
         }
-#ifdef HAVE_LUAJIT
-        LuajitReturnState(s);
-#else
         lua_close(s);
-#endif
     }
 }
 
@@ -352,5 +342,3 @@ int LuaPushInteger(lua_State *luastate, lua_Integer n)
     lua_pushinteger(luastate, n);
     return 1;
 }
-
-#endif /* HAVE_LUA */

@@ -166,8 +166,9 @@ void DetectPktInspectEngineRegister(const char *name,
 /** \brief register inspect engine at start up time
  *
  *  \note errors are fatal */
-void DetectAppLayerInspectEngineRegister(const char *name, AppProto alproto, uint32_t dir,
-        int progress, InspectEngineFuncPtr Callback, InspectionBufferGetDataPtr GetData)
+static void AppLayerInspectEngineRegisterInternal(const char *name, AppProto alproto, uint32_t dir,
+        int progress, InspectEngineFuncPtr Callback, InspectionBufferGetDataPtr GetData,
+        InspectionMultiBufferGetDataPtr GetMultiData)
 {
     BUG_ON(progress >= 48);
 
@@ -186,6 +187,10 @@ void DetectAppLayerInspectEngineRegister(const char *name, AppProto alproto, uin
     } else if (Callback == DetectEngineInspectBufferGeneric && GetData == NULL) {
         SCLogError("Invalid arguments: must register "
                    "GetData with DetectEngineInspectBufferGeneric");
+        BUG_ON(1);
+    } else if (Callback == DetectEngineInspectMultiBufferGeneric && GetMultiData == NULL) {
+        SCLogError("Invalid arguments: must register "
+                   "GetData with DetectEngineInspectMultiBufferGeneric");
         BUG_ON(1);
     }
 
@@ -207,7 +212,11 @@ void DetectAppLayerInspectEngineRegister(const char *name, AppProto alproto, uin
     new_engine->sm_list_base = (uint16_t)sm_list;
     new_engine->progress = (int16_t)progress;
     new_engine->v2.Callback = Callback;
-    new_engine->v2.GetData = GetData;
+    if (Callback == DetectEngineInspectBufferGeneric) {
+        new_engine->v2.GetData = GetData;
+    } else if (Callback == DetectEngineInspectMultiBufferGeneric) {
+        new_engine->v2.GetMultiData = GetMultiData;
+    }
 
     if (g_app_inspect_engines == NULL) {
         g_app_inspect_engines = new_engine;
@@ -219,6 +228,12 @@ void DetectAppLayerInspectEngineRegister(const char *name, AppProto alproto, uin
 
         t->next = new_engine;
     }
+}
+
+void DetectAppLayerInspectEngineRegister(const char *name, AppProto alproto, uint32_t dir,
+        int progress, InspectEngineFuncPtr Callback, InspectionBufferGetDataPtr GetData)
+{
+    AppLayerInspectEngineRegisterInternal(name, alproto, dir, progress, Callback, GetData, NULL);
 }
 
 /* copy an inspect engine with transforms to a new list id. */
@@ -976,7 +991,6 @@ static void DetectBufferTypeFree(void)
 
     HashListTableFree(g_buffer_type_hash);
     g_buffer_type_hash = NULL;
-    return;
 }
 #endif
 static int DetectBufferTypeAdd(const char *string)
@@ -1905,7 +1919,6 @@ static int DetectEngineInspectRulePayloadMatches(
         if (p->flags & PKT_DETECT_HAS_STREAMDATA) {
             pmatch = DetectEngineInspectStreamPayload(de_ctx, det_ctx, s, p->flow, p);
             if (pmatch) {
-                det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_STREAM_CONTENT_MATCH;
                 *alert_flags |= PACKET_ALERT_FLAG_STREAM_MATCH;
             }
         }
@@ -2162,6 +2175,46 @@ uint8_t DetectEngineInspectBufferGeneric(DetectEngineCtx *de_ctx, DetectEngineTh
         return eof ? DETECT_ENGINE_INSPECT_SIG_CANT_MATCH :
                      DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
     }
+}
+
+// wrapper for both DetectAppLayerInspectEngineRegister and DetectAppLayerMpmRegister
+// with cast of callback function
+void DetectAppLayerMultiRegister(const char *name, AppProto alproto, uint32_t dir, int progress,
+        InspectionMultiBufferGetDataPtr GetData, int priority, int tx_min_progress)
+{
+    AppLayerInspectEngineRegisterInternal(
+            name, alproto, dir, progress, DetectEngineInspectMultiBufferGeneric, NULL, GetData);
+    DetectAppLayerMpmMultiRegister(name, dir, priority, PrefilterMultiGenericMpmRegister, GetData,
+            alproto, tx_min_progress);
+}
+
+uint8_t DetectEngineInspectMultiBufferGeneric(DetectEngineCtx *de_ctx,
+        DetectEngineThreadCtx *det_ctx, const DetectEngineAppInspectionEngine *engine,
+        const Signature *s, Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
+{
+    uint32_t local_id = 0;
+    const DetectEngineTransforms *transforms = NULL;
+    if (!engine->mpm) {
+        transforms = engine->v2.transforms;
+    }
+
+    do {
+        InspectionBuffer *buffer = engine->v2.GetMultiData(
+                det_ctx, transforms, f, flags, txv, engine->sm_list, local_id);
+
+        if (buffer == NULL || buffer->inspect == NULL)
+            break;
+
+        // The GetData functions set buffer->flags to DETECT_CI_FLAGS_SINGLE
+        // This is not meant for streaming buffers
+        const bool match = DetectEngineContentInspectionBuffer(de_ctx, det_ctx, s, engine->smd,
+                NULL, f, buffer, DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE);
+        if (match) {
+            return DETECT_ENGINE_INSPECT_SIG_MATCH;
+        }
+        local_id++;
+    } while (1);
+    return DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
 }
 
 /**
@@ -2439,6 +2492,14 @@ static DetectEngineCtx *DetectEngineCtxInitReal(
         goto error;
     }
 
+    de_ctx->sm_types_prefilter = SCCalloc(DETECT_TBLSIZE, sizeof(bool));
+    if (de_ctx->sm_types_prefilter == NULL) {
+        goto error;
+    }
+    de_ctx->sm_types_silent_error = SCCalloc(DETECT_TBLSIZE, sizeof(bool));
+    if (de_ctx->sm_types_silent_error == NULL) {
+        goto error;
+    }
     if (DetectEngineCtxLoadConf(de_ctx) == -1) {
         goto error;
     }
@@ -2457,7 +2518,7 @@ static DetectEngineCtx *DetectEngineCtxInitReal(
 
     SCClassConfInit(de_ctx);
     if (!SCClassConfLoadClassificationConfigFile(de_ctx, NULL)) {
-        if (RunmodeGetCurrent() == RUNMODE_CONF_TEST)
+        if (SCRunmodeGet() == RUNMODE_CONF_TEST)
             goto error;
     }
 
@@ -2466,7 +2527,7 @@ static DetectEngineCtx *DetectEngineCtxInitReal(
     }
     SCReferenceConfInit(de_ctx);
     if (SCRConfLoadReferenceConfigFile(de_ctx, NULL) < 0) {
-        if (RunmodeGetCurrent() == RUNMODE_CONF_TEST)
+        if (SCRunmodeGet() == RUNMODE_CONF_TEST)
             goto error;
     }
 
@@ -2478,7 +2539,6 @@ error:
         DetectEngineCtxFree(de_ctx);
     }
     return NULL;
-
 }
 
 DetectEngineCtx *DetectEngineCtxInitStubForMT(void)
@@ -2572,6 +2632,8 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx)
     SigGroupCleanup(de_ctx);
 
     SpmDestroyGlobalThreadCtx(de_ctx->spm_global_thread_ctx);
+    SCFree(de_ctx->sm_types_prefilter);
+    SCFree(de_ctx->sm_types_silent_error);
 
     MpmFactoryDeRegisterAllMpmCtxProfiles(de_ctx);
 
@@ -2698,7 +2760,7 @@ static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
         }
     }
 
-    if (run_mode == RUNMODE_UNITTEST) {
+    if (RunmodeIsUnittests()) {
         de_ctx->sgh_mpm_ctx_cnf = ENGINE_SGH_MPM_FACTORY_CONTEXT_FULL;
     }
 
@@ -3276,6 +3338,21 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data)
     det_ctx->counter_alerts = StatsRegisterCounter("detect.alert", tv);
     det_ctx->counter_alerts_overflow = StatsRegisterCounter("detect.alert_queue_overflow", tv);
     det_ctx->counter_alerts_suppressed = StatsRegisterCounter("detect.alerts_suppressed", tv);
+
+    /* Register counter for Lua rule errors. */
+    det_ctx->lua_rule_errors = StatsRegisterCounter("detect.lua.errors", tv);
+
+    /* Register a counter for Lua blocked function attempts. */
+    det_ctx->lua_blocked_function_errors =
+            StatsRegisterCounter("detect.lua.blocked_function_errors", tv);
+
+    /* Register a counter for Lua instruction limit errors. */
+    det_ctx->lua_instruction_limit_errors =
+            StatsRegisterCounter("detect.lua.instruction_limit_errors", tv);
+
+    /* Register a counter for Lua memory limit errors. */
+    det_ctx->lua_memory_limit_errors = StatsRegisterCounter("detect.lua.memory_limit_errors", tv);
+
 #ifdef PROFILING
     det_ctx->counter_mpm_list = StatsRegisterAvgCounter("detect.mpm_list", tv);
     det_ctx->counter_nonmpm_list = StatsRegisterAvgCounter("detect.nonmpm_list", tv);
@@ -4868,8 +4945,6 @@ static void DetectEngineDeInitYamlConf(void)
 {
     ConfDeInit();
     ConfRestoreContextBackup();
-
-    return;
 }
 
 static int DetectEngineTest01(void)
@@ -5067,5 +5142,4 @@ void DetectEngineRegisterTests(void)
     UtRegisterTest("DetectEngineTest08", DetectEngineTest08);
     UtRegisterTest("DetectEngineTest09", DetectEngineTest09);
 #endif
-    return;
 }

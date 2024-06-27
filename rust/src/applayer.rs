@@ -58,6 +58,9 @@ impl StreamSlice {
         self.input_len
     }
     pub fn as_slice(&self) -> &[u8] {
+        if self.input.is_null() && self.input_len == 0 {
+            return &[];
+        }
         unsafe { std::slice::from_raw_parts(self.input, self.input_len as usize) }
     }
     pub fn is_empty(&self) -> bool {
@@ -193,9 +196,33 @@ impl AppLayerTxData {
     pub fn update_file_flags(&mut self, state_flags: u16) {
         if (self.file_flags & state_flags) != state_flags {
             SCLogDebug!("updating tx file_flags {:04x} with state flags {:04x}", self.file_flags, state_flags);
-            self.file_flags |= state_flags;
+            let mut nf = state_flags;
+            // With keyword filestore:both,flow :
+            // There may be some opened unclosed file in one direction without filestore
+            // As such it has tx file_flags had FLOWFILE_NO_STORE_TS or TC
+            // But a new file in the other direction may trigger filestore:both,flow
+            // And thus set state_flags FLOWFILE_STORE_TS
+            // If the file was opened without storing it, do not try to store just the end of it
+            if (self.file_flags & FLOWFILE_NO_STORE_TS) != 0 && (state_flags & FLOWFILE_STORE_TS) != 0 {
+                nf &= !FLOWFILE_STORE_TS;
+            }
+            if (self.file_flags & FLOWFILE_NO_STORE_TC) != 0 && (state_flags & FLOWFILE_STORE_TC) != 0 {
+                nf &= !FLOWFILE_STORE_TC;
+            }
+            self.file_flags |= nf;
         }
     }
+}
+
+// need to keep in sync with C flow.h
+pub const FLOWFILE_NO_STORE_TS: u16 = BIT_U16!(2);
+pub const FLOWFILE_NO_STORE_TC: u16 = BIT_U16!(3);
+pub const FLOWFILE_STORE_TS: u16 = BIT_U16!(12);
+pub const FLOWFILE_STORE_TC: u16 = BIT_U16!(13);
+
+#[no_mangle]
+pub unsafe extern "C" fn SCTxDataUpdateFileFlags(txd: &mut AppLayerTxData, state_flags: u16) {
+    txd.update_file_flags(state_flags);
 }
 
 #[macro_export]
@@ -421,7 +448,7 @@ pub type GetEventInfoFn     = unsafe extern "C" fn (*const c_char, *mut c_int, *
 pub type GetEventInfoByIdFn = unsafe extern "C" fn (c_int, *mut *const c_char, *mut AppLayerEventType) -> i8;
 pub type LocalStorageNewFn  = extern "C" fn () -> *mut c_void;
 pub type LocalStorageFreeFn = extern "C" fn (*mut c_void);
-pub type GetTxFilesFn       = unsafe extern "C" fn (*mut c_void, *mut c_void, u8) -> AppLayerGetFileState;
+pub type GetTxFilesFn       = unsafe extern "C" fn (*mut c_void, u8) -> AppLayerGetFileState;
 pub type GetTxIteratorFn    = unsafe extern "C" fn (ipproto: u8, alproto: AppProto,
                                              state: *mut c_void,
                                              min_tx_id: u64,
@@ -488,6 +515,7 @@ extern {
     pub fn AppLayerParserSetStreamDepth(ipproto: u8, alproto: AppProto, stream_depth: u32);
     pub fn AppLayerParserConfParserEnabled(ipproto: *const c_char, proto: *const c_char) -> c_int;
     pub fn AppLayerParserRegisterLogger(pproto: u8, alproto: AppProto);
+    pub fn AppLayerParserRegisterParserAcceptableDataDirection(ipproto: u8, alproto: AppProto, dir: u8);
 }
 
 #[repr(C)]

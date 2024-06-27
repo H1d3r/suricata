@@ -153,40 +153,39 @@ void FlowInit(Flow *f, const Packet *p)
     f->vlan_idx = p->vlan_idx;
     f->livedev = p->livedev;
 
-    if (PKT_IS_IPV4(p)) {
-        FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(p, &f->src);
-        FLOW_SET_IPV4_DST_ADDR_FROM_PACKET(p, &f->dst);
-        f->min_ttl_toserver = f->max_ttl_toserver = IPV4_GET_IPTTL((p));
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr *ip4h = PacketGetIPv4(p);
+        FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(ip4h, &f->src);
+        FLOW_SET_IPV4_DST_ADDR_FROM_PACKET(ip4h, &f->dst);
+        f->min_ttl_toserver = f->max_ttl_toserver = IPV4_GET_RAW_IPTTL(ip4h);
         f->flags |= FLOW_IPV4;
-    } else if (PKT_IS_IPV6(p)) {
-        FLOW_SET_IPV6_SRC_ADDR_FROM_PACKET(p, &f->src);
-        FLOW_SET_IPV6_DST_ADDR_FROM_PACKET(p, &f->dst);
-        f->min_ttl_toserver = f->max_ttl_toserver = IPV6_GET_HLIM((p));
+    } else if (PacketIsIPv6(p)) {
+        const IPV6Hdr *ip6h = PacketGetIPv6(p);
+        FLOW_SET_IPV6_SRC_ADDR_FROM_PACKET(ip6h, &f->src);
+        FLOW_SET_IPV6_DST_ADDR_FROM_PACKET(ip6h, &f->dst);
+        f->min_ttl_toserver = f->max_ttl_toserver = IPV6_GET_RAW_HLIM(ip6h);
         f->flags |= FLOW_IPV6;
     } else {
         SCLogDebug("neither IPv4 or IPv6, weird");
         DEBUG_VALIDATE_BUG_ON(1);
     }
 
-    if (p->tcph != NULL) { /* XXX MACRO */
-        SET_TCP_SRC_PORT(p,&f->sp);
-        SET_TCP_DST_PORT(p,&f->dp);
-    } else if (p->udph != NULL) { /* XXX MACRO */
-        SET_UDP_SRC_PORT(p,&f->sp);
-        SET_UDP_DST_PORT(p,&f->dp);
-    } else if (p->icmpv4h != NULL) {
+    if (PacketIsTCP(p) || PacketIsUDP(p)) {
+        f->sp = p->sp;
+        f->dp = p->dp;
+    } else if (PacketIsICMPv4(p)) {
         f->icmp_s.type = p->icmp_s.type;
         f->icmp_s.code = p->icmp_s.code;
         FlowSetICMPv4CounterPart(f);
-    } else if (p->icmpv6h != NULL) {
+    } else if (PacketIsICMPv6(p)) {
         f->icmp_s.type = p->icmp_s.type;
         f->icmp_s.code = p->icmp_s.code;
         FlowSetICMPv6CounterPart(f);
-    } else if (p->sctph != NULL) { /* XXX MACRO */
-        SET_SCTP_SRC_PORT(p,&f->sp);
-        SET_SCTP_DST_PORT(p,&f->dp);
-    } else if (p->esph != NULL) {
-        f->esp.spi = ESP_GET_SPI(p);
+    } else if (PacketIsSCTP(p)) {
+        f->sp = p->sp;
+        f->dp = p->dp;
+    } else if (PacketIsESP(p)) {
+        f->esp.spi = ESP_GET_SPI(PacketGetESP(p));
     } else {
         /* nothing to do for this IP proto. */
         SCLogDebug("no special setup for IP proto %u", p->proto);

@@ -26,6 +26,7 @@
 #include "suricata-common.h"
 #include "stream-tcp.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 
 #include "detect.h"
 #include "detect-parse.h"
@@ -117,10 +118,9 @@ static int DetectStreamSizeMatchAux(const DetectStreamSizeData *sd, const TcpSes
 static int DetectStreamSizeMatch(
         DetectEngineThreadCtx *det_ctx, Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
-
     const DetectStreamSizeData *sd = (const DetectStreamSizeData *)ctx;
 
-    if (!(PKT_IS_TCP(p)))
+    if (!(PacketIsTCP(p)))
         return 0;
     if (p->flow == NULL || p->flow->protoctx == NULL)
         return 0;
@@ -169,7 +169,7 @@ void DetectStreamSizeFree(DetectEngineCtx *de_ctx, void *ptr)
 static void PrefilterPacketStreamsizeMatch(
         DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
 {
-    if (!(PKT_IS_TCP(p)) || PKT_IS_PSEUDOPKT(p))
+    if (!(PacketIsTCP(p)))
         return;
 
     if (p->flow == NULL || p->flow->protoctx == NULL)
@@ -211,8 +211,9 @@ static bool PrefilterPacketStreamSizeCompare(PrefilterPacketHeaderValue v, void 
 
 static int PrefilterSetupStreamSize(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_STREAM_SIZE, PrefilterPacketStreamSizeSet,
-            PrefilterPacketStreamSizeCompare, PrefilterPacketStreamsizeMatch);
+    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_STREAM_SIZE, SIG_MASK_REQUIRE_FLOW,
+            PrefilterPacketStreamSizeSet, PrefilterPacketStreamSizeCompare,
+            PrefilterPacketStreamsizeMatch);
 }
 
 static bool PrefilterStreamSizeIsPrefilterable(const Signature *s)
@@ -330,7 +331,7 @@ static int DetectStreamSizeParseTest03 (void)
     ssn.client = client;
     f.protoctx = &ssn;
     p->flow = &f;
-    p->tcph = &tcph;
+    PacketSetTCP(p, (uint8_t *)&tcph);
     sm.ctx = (SigMatchCtx*)sd;
 
     result = DetectStreamSizeMatch(&dtx, p, &s, sm.ctx);
@@ -391,7 +392,7 @@ static int DetectStreamSizeParseTest04 (void)
     ssn.client = client;
     f.protoctx = &ssn;
     p->flow = &f;
-    p->ip4h = &ip4h;
+    UTHSetIPV4Hdr(p, &ip4h);
     sm.ctx = (SigMatchCtx*)sd;
 
     if (!DetectStreamSizeMatch(&dtx, p, &s, sm.ctx))

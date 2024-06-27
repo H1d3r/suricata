@@ -33,6 +33,7 @@ typedef struct FlowStorageId FlowStorageId;
 #include "util-exception-policy-types.h"
 #include "util-var.h"
 #include "util-optimize.h"
+#include "util-validate.h"
 #include "app-layer-protos.h"
 
 /* Part of the flow structure, so we declare it here.
@@ -51,7 +52,8 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 /** At least one packet from the destination address was seen */
 #define FLOW_TO_DST_SEEN                BIT_U32(1)
 
-// vacancy
+/** next packet in toclient direction will act on updated app-layer state */
+#define FLOW_TC_APP_UPDATE_NEXT BIT_U32(2)
 
 /** Flow was inspected against IP-Only sigs in the toserver direction */
 #define FLOW_TOSERVER_IPONLY_SET        BIT_U32(3)
@@ -115,6 +117,9 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 
 #define FLOW_TS_APP_UPDATED BIT_U32(29)
 #define FLOW_TC_APP_UPDATED BIT_U32(30)
+
+/** next packet in toserver direction will act on updated app-layer state */
+#define FLOW_TS_APP_UPDATE_NEXT BIT_U32(31)
 
 /* File flags */
 
@@ -189,34 +194,38 @@ typedef struct AppLayerParserState_ AppLayerParserState;
  *
  * We set the rest of the struct to 0 so we can
  * prevent using memset. */
-#define FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(p, a) do {             \
-        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->s_ip_src.s_addr; \
-        (a)->addr_data32[1] = 0;                                  \
-        (a)->addr_data32[2] = 0;                                  \
-        (a)->addr_data32[3] = 0;                                  \
+#define FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(ip4h, a)                                                \
+    do {                                                                                           \
+        (a)->addr_data32[0] = (uint32_t)(ip4h)->s_ip_src.s_addr;                                   \
+        (a)->addr_data32[1] = 0;                                                                   \
+        (a)->addr_data32[2] = 0;                                                                   \
+        (a)->addr_data32[3] = 0;                                                                   \
     } while (0)
 
-#define FLOW_SET_IPV4_DST_ADDR_FROM_PACKET(p, a) do {             \
-        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->s_ip_dst.s_addr; \
-        (a)->addr_data32[1] = 0;                                  \
-        (a)->addr_data32[2] = 0;                                  \
-        (a)->addr_data32[3] = 0;                                  \
+#define FLOW_SET_IPV4_DST_ADDR_FROM_PACKET(ip4h, a)                                                \
+    do {                                                                                           \
+        (a)->addr_data32[0] = (uint32_t)(ip4h)->s_ip_dst.s_addr;                                   \
+        (a)->addr_data32[1] = 0;                                                                   \
+        (a)->addr_data32[2] = 0;                                                                   \
+        (a)->addr_data32[3] = 0;                                                                   \
     } while (0)
 
 /* Set the IPv6 addressesinto the Addrs of the Packet.
  * Make sure p->ip6h is initialized and validated. */
-#define FLOW_SET_IPV6_SRC_ADDR_FROM_PACKET(p, a) do {   \
-        (a)->addr_data32[0] = (p)->ip6h->s_ip6_src[0];  \
-        (a)->addr_data32[1] = (p)->ip6h->s_ip6_src[1];  \
-        (a)->addr_data32[2] = (p)->ip6h->s_ip6_src[2];  \
-        (a)->addr_data32[3] = (p)->ip6h->s_ip6_src[3];  \
+#define FLOW_SET_IPV6_SRC_ADDR_FROM_PACKET(ip6h, a)                                                \
+    do {                                                                                           \
+        (a)->addr_data32[0] = (ip6h)->s_ip6_src[0];                                                \
+        (a)->addr_data32[1] = (ip6h)->s_ip6_src[1];                                                \
+        (a)->addr_data32[2] = (ip6h)->s_ip6_src[2];                                                \
+        (a)->addr_data32[3] = (ip6h)->s_ip6_src[3];                                                \
     } while (0)
 
-#define FLOW_SET_IPV6_DST_ADDR_FROM_PACKET(p, a) do {   \
-        (a)->addr_data32[0] = (p)->ip6h->s_ip6_dst[0];  \
-        (a)->addr_data32[1] = (p)->ip6h->s_ip6_dst[1];  \
-        (a)->addr_data32[2] = (p)->ip6h->s_ip6_dst[2];  \
-        (a)->addr_data32[3] = (p)->ip6h->s_ip6_dst[3];  \
+#define FLOW_SET_IPV6_DST_ADDR_FROM_PACKET(ip6h, a)                                                \
+    do {                                                                                           \
+        (a)->addr_data32[0] = (ip6h)->s_ip6_dst[0];                                                \
+        (a)->addr_data32[1] = (ip6h)->s_ip6_dst[1];                                                \
+        (a)->addr_data32[2] = (ip6h)->s_ip6_dst[2];                                                \
+        (a)->addr_data32[3] = (ip6h)->s_ip6_dst[3];                                                \
     } while (0)
 
 /* pkt flow flags */
@@ -632,12 +641,9 @@ static inline void FlowSetNoPayloadInspectionFlag(Flow *f)
 static inline void FlowReference(Flow **d, Flow *f)
 {
     if (likely(f != NULL)) {
-#ifdef DEBUG_VALIDATION
-        BUG_ON(*d == f);
-#else
+        DEBUG_VALIDATE_BUG_ON(*d == f);
         if (*d == f)
             return;
-#endif
         *d = f;
     }
 }

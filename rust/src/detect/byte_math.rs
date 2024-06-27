@@ -18,7 +18,7 @@
 // Author: Jeff Lucovsky <jlucovsky@oisf.net>
 
 use crate::detect::error::RuleParseError;
-use crate::detect::parser::{parse_token, take_until_whitespace};
+use crate::detect::parser::{parse_var, take_until_whitespace, ResultValue};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
@@ -87,12 +87,6 @@ const BASE_DEFAULT: ByteMathBase = ByteMathBase::BaseDec;
 pub const DETECT_BYTEMATH_FIXED_PARAM_COUNT: usize = 5;
 // Optional parameters: endian, relative, string, dce, bitmask
 pub const DETECT_BYTEMATH_MAX_PARAM_COUNT: usize = 10;
-
-#[derive(Debug)]
-enum ResultValue {
-    Numeric(u64),
-    String(String),
-}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -192,17 +186,6 @@ fn get_endian_value(value: &str) -> Result<ByteMathEndian, ()> {
     };
 
     Ok(res)
-}
-
-// Parsed as a u64 for validation with u32 {min,max} so values greater than uint32
-// are not treated as a string value.
-fn parse_var(input: &str) -> IResult<&str, ResultValue, RuleParseError<&str>> {
-    let (input, value) = parse_token(input)?;
-    if let Ok(val) = value.parse::<u64>() {
-        Ok((input, ResultValue::Numeric(val)))
-    } else {
-        Ok((input, ResultValue::String(value.to_string())))
-    }
 }
 
 fn parse_bytemath(input: &str) -> IResult<&str, DetectByteMathData, RuleParseError<&str>> {
@@ -420,7 +403,7 @@ fn parse_bytemath(input: &str) -> IResult<&str, DetectByteMathData, RuleParseErr
 
 /// Intermediary function between the C code and the parsing functions.
 #[no_mangle]
-pub unsafe extern "C" fn ScByteMathParse(c_arg: *const c_char) -> *mut DetectByteMathData {
+pub unsafe extern "C" fn SCByteMathParse(c_arg: *const c_char) -> *mut DetectByteMathData {
     if c_arg.is_null() {
         return std::ptr::null_mut();
     }
@@ -438,7 +421,7 @@ pub unsafe extern "C" fn ScByteMathParse(c_arg: *const c_char) -> *mut DetectByt
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ScByteMathFree(ptr: *mut DetectByteMathData) {
+pub unsafe extern "C" fn SCByteMathFree(ptr: *mut DetectByteMathData) {
     if !ptr.is_null() {
         let _ = Box::from_raw(ptr);
     }

@@ -243,9 +243,6 @@
     #check for os
     AC_MSG_CHECKING([host os])
 
-    # Default lua libname if not detected otherwise.
-    LUA_LIB_NAME="lua5.1"
-
     # If no host os was detected, try with uname
     if test -z "$host" ; then
         host="`uname`"
@@ -259,7 +256,6 @@
     e_magic_file_comment="#"
     case "$host" in
         *-*-*freebsd*)
-            LUA_LIB_NAME="lua-5.1"
             CFLAGS="${CFLAGS} -DOS_FREEBSD"
             CPPFLAGS="${CPPFLAGS} -I/usr/local/include -I/usr/local/include/libnet11"
             LDFLAGS="${LDFLAGS} -L/usr/local/lib -L/usr/local/lib/libnet11"
@@ -272,7 +268,6 @@
             RUST_LDADD="-lm -lc++ -lc++abi"
             ;;
         *darwin*|*Darwin*)
-            LUA_LIB_NAME="lua-5.1"
             CFLAGS="${CFLAGS} -DOS_DARWIN"
             CPPFLAGS="${CPPFLAGS} -I/opt/local/include"
             LDFLAGS="${LDFLAGS} -L/opt/local/lib -framework Security"
@@ -293,7 +288,6 @@
             TRY_WPCAP="yes"
             ;;
         *-*-cygwin)
-            LUA_LIB_NAME="lua"
             WINDOWS_PATH="yes"
             TRY_WPCAP="yes"
             ;;
@@ -323,6 +317,17 @@
     if [ test "x$have_c11" = "xno" ]; then
         CFLAGS="$CFLAGS -std=gnu99"
     fi
+
+    # check if our target supports -Wl,--start-group
+    AC_MSG_CHECKING(for -Wl,--start-group support)
+    OLDFLAGS=$LDFLAGS
+    LDFLAGS="-Wl,--start-group,--end-group"
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[]])],[
+            have_linker_group_support=yes
+            AC_MSG_RESULT(yes)],
+            [AC_MSG_RESULT(no)])
+    LDFLAGS=$OLDFLAGS
+    AM_CONDITIONAL([LINKER_SUPPORTS_GROUP], [test "x$have_linker_group_support" = "xyes"])
 
     # check if our target supports thread local storage
     AC_MSG_CHECKING(for thread local storage gnu __thread support)
@@ -1419,7 +1424,7 @@
             exit 1
         fi
         CFLAGS="${CFLAGS} `pkg-config --cflags libdpdk`"
-        LIBS="${LIBS} -Wl,-R,`pkg-config --libs-only-L libdpdk | cut -c 3-` -lnuma `pkg-config --libs libdpdk`"
+        LIBS="${LIBS} -lnuma `pkg-config --libs libdpdk`"
 
         if test ! -z "$(ldconfig -p | grep librte_net_bond)"; then
             AC_DEFINE([HAVE_DPDK_BOND],[1],(DPDK Bond PMD support enabled))
@@ -1594,6 +1599,7 @@
         AC_CHECK_LIB([htp], [htp_tx_get_response_headers_raw],AC_DEFINE_UNQUOTED([HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW],[1],[Found htp_tx_get_response_headers_raw in libhtp]) ,,[-lhtp])
         AC_CHECK_LIB([htp], [htp_decode_query_inplace],AC_DEFINE_UNQUOTED([HAVE_HTP_DECODE_QUERY_INPLACE],[1],[Found htp_decode_query_inplace function in libhtp]) ,,[-lhtp])
         AC_CHECK_LIB([htp], [htp_config_set_response_decompression_layer_limit],AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_RESPONSE_DECOMPRESSION_LAYER_LIMIT],[1],[Found htp_config_set_response_decompression_layer_limit function in libhtp]) ,,[-lhtp])
+        AC_CHECK_LIB([htp], [htp_config_set_allow_space_uri],AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_ALLOW_SPACE_URI],[1],[Found htp_config_set_allow_space_uri function in libhtp]) ,,[-lhtp])
         AC_EGREP_HEADER(htp_config_set_path_decode_u_encoding, htp/htp.h, AC_DEFINE_UNQUOTED([HAVE_HTP_SET_PATH_DECODE_U_ENCODING],[1],[Found usable htp_config_set_path_decode_u_encoding function in libhtp]) )
         AC_CHECK_LIB([htp], [htp_config_set_lzma_memlimit],AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_LZMA_MEMLIMIT],[1],[Found htp_config_set_lzma_memlimit function in libhtp]) ,,[-lhtp])
         AC_CHECK_LIB([htp], [htp_config_set_lzma_layers],AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_LZMA_LAYERS],[1],[Found htp_config_set_lzma_layers function in libhtp]) ,,[-lhtp])
@@ -1620,6 +1626,7 @@
             AC_DEFINE_UNQUOTED([HAVE_HTP_DECODE_QUERY_INPLACE],[1],[Assuming htp_decode_query_inplace function in bundled libhtp])
             # enable when libhtp has been updated
             AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_RESPONSE_DECOMPRESSION_LAYER_LIMIT],[1],[Assuming htp_config_set_response_decompression_layer_limit function in bundled libhtp])
+            AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_ALLOW_SPACE_URI],[1],[Assuming htp_config_set_allow_space_uri function in bundled libhtp])
             AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_LZMA_MEMLIMIT],[1],[Assuming htp_config_set_lzma_memlimit function in bundled libhtp])
             AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_LZMA_LAYERS],[1],[Assuming htp_config_set_lzma_layers function in bundled libhtp])
             AC_DEFINE_UNQUOTED([HAVE_HTP_CONFIG_SET_COMPRESSION_BOMB_LIMIT],[1],[Assuming htp_config_set_compression_bomb_limit function in bundled libhtp])
@@ -1873,197 +1880,6 @@
         else
             echo "Napatech Flow Processing is Disabled."
         fi
-    fi
-
-  # liblua
-    AC_ARG_ENABLE(lua,
-            AS_HELP_STRING([--enable-lua],[Enable Lua support]),
-            [ enable_lua="$enableval"],
-            [ enable_lua="no"])
-    AC_ARG_ENABLE(luajit,
-            AS_HELP_STRING([--enable-luajit],[Enable Luajit support]),
-            [ enable_luajit="$enableval"],
-            [ enable_luajit="no"])
-    if test "$enable_lua" = "yes"; then
-        if test "$enable_luajit" = "yes"; then
-            echo "ERROR: can't enable liblua and luajit at the same time."
-            echo "For LuaJIT, just use --enable-luajit. For liblua (no jit)"
-            echo "support, use just --enable-lua."
-            echo "Both options will enable the Lua scripting capabilities"
-            echo "in Suricata".
-            echo
-            exit 1
-        fi
-    fi
-
-    AC_ARG_WITH(liblua_includes,
-            [  --with-liblua-includes=DIR  liblua include directory],
-            [with_liblua_includes="$withval"],[with_liblua_includes="no"])
-    AC_ARG_WITH(liblua_libraries,
-            [  --with-liblua-libraries=DIR    liblua library directory],
-            [with_liblua_libraries="$withval"],[with_liblua_libraries="no"])
-
-    if test "$enable_lua" = "yes"; then
-        if test "$with_liblua_includes" != "no"; then
-            CPPFLAGS="${CPPFLAGS} -I${with_liblua_includes}"
-        else
-            # lua lua51 lua5.1 lua-5.1
-            PKG_CHECK_MODULES([LUA], [lua], [LUA="yes"], [
-                PKG_CHECK_MODULES([LUA], [lua5.1], [LUA="yes"], [
-                    PKG_CHECK_MODULES([LUA], [lua-5.1], [LUA="yes"], [
-                        PKG_CHECK_MODULES([LUA], [lua51], [LUA="yes"], [
-                            LUA="no"
-                        ])
-                    ])
-                ])
-            ])
-            CPPFLAGS="${CPPFLAGS} ${LUA_CFLAGS}"
-        fi
-
-        AC_CHECK_HEADER(lualib.h,LUA="yes",LUA="no")
-        if test "$LUA" = "yes"; then
-            if test "$with_liblua_libraries" != "no"; then
-                LDFLAGS="${LDFLAGS}  -L${with_liblua_libraries}"
-                AC_CHECK_LIB(${LUA_LIB_NAME}, luaL_openlibs,, LUA="no")
-                if test "$LUA" = "no"; then
-                    echo
-                    echo "   ERROR!  liblua library not found, go get it"
-                    echo "   from http://lua.org/index.html or your distribution:"
-                    echo
-                    echo "   Ubuntu: apt-get install liblua5.1-dev"
-                    echo "   Fedora: dnf install lua-devel"
-                    echo "   CentOS/RHEL: yum install lua-devel"
-                    echo
-                    echo "   If you installed software in a non-standard prefix"
-                    echo "   consider adjusting the PKG_CONFIG_PATH environment variable"
-                    echo "   or use --with-liblua-libraries configure option."
-                    echo
-                    exit 1
-                fi
-            else
-                # lua lua51 lua5.1 lua-5.1
-                PKG_CHECK_MODULES([LUA], [lua], [LUA="yes"], [
-                    PKG_CHECK_MODULES([LUA], [lua5.1], [LUA="yes"], [
-                        PKG_CHECK_MODULES([LUA], [lua-5.1], [LUA="yes"], [
-                            PKG_CHECK_MODULES([LUA], [lua51], [LUA="yes"], [
-                                LUA="no"
-                            ])
-                        ])
-                    ])
-                ])
-                LIBS="${LIBS} ${LUA_LIBS}"
-            fi
-
-            if test "$LUA" = "no"; then
-                AC_CHECK_LIB(lua, luaL_openlibs,, LUA="no")
-            fi
-
-            if test "$LUA" = "yes"; then
-                AC_DEFINE([HAVE_LUA],[1],[liblua available])
-                enable_lua="yes"
-            fi
-        else
-            echo
-                echo "   ERROR!  liblua headers not found, go get them"
-                echo "   from http://lua.org/index.html or your distribution:"
-                echo
-                echo "   Ubuntu: apt-get install liblua5.1-dev"
-                echo "   Fedora: dnf install lua-devel"
-                echo "   CentOS/RHEL: yum install lua-devel"
-                echo
-                echo "   If you installed software in a non-standard prefix"
-                echo "   consider adjusting the PKG_CONFIG_PATH environment variable"
-                echo "   or use --with-liblua-includes and --with-liblua-libraries"
-                echo "   configure option."
-                echo
-                exit 1
-        fi
-    fi
-
-  # libluajit
-    AC_ARG_WITH(libluajit_includes,
-            [  --with-libluajit-includes=DIR  libluajit include directory],
-            [with_libluajit_includes="$withval"],[with_libluajit_includes="no"])
-    AC_ARG_WITH(libluajit_libraries,
-            [  --with-libluajit-libraries=DIR    libluajit library directory],
-            [with_libluajit_libraries="$withval"],[with_libluajit_libraries="no"])
-
-    if test "$enable_luajit" = "yes"; then
-        if test "$with_libluajit_includes" != "no"; then
-            CPPFLAGS="${CPPFLAGS} -I${with_libluajit_includes}"
-        else
-            PKG_CHECK_MODULES([LUAJIT], [luajit], , LUAJIT="no")
-            CPPFLAGS="${CPPFLAGS} ${LUAJIT_CFLAGS}"
-        fi
-
-        AC_CHECK_HEADER(lualib.h,LUAJIT="yes",LUAJIT="no")
-        if test "$LUAJIT" = "yes"; then
-            if test "$with_libluajit_libraries" != "no"; then
-                LDFLAGS="${LDFLAGS}  -L${with_libluajit_libraries}"
-            else
-                PKG_CHECK_MODULES([LUAJIT], [luajit])
-                LIBS="${LIBS} ${LUAJIT_LIBS}"
-            fi
-
-            AC_CHECK_LIB(luajit-5.1, luaL_openlibs,, LUAJIT="no")
-
-            if test "$LUAJIT" = "no"; then
-                echo
-                echo "   ERROR!  libluajit library not found, go get it"
-                echo "   from http://luajit.org/index.html or your distribution:"
-                echo
-                echo "   Ubuntu: apt-get install libluajit-5.1-dev"
-                echo
-                echo "   If you installed software in a non-standard prefix"
-                echo "   consider adjusting the PKG_CONFIG_PATH environment variable"
-                echo "   or use --with-libluajit-libraries configure option."
-                echo
-                exit 1
-            fi
-
-            AC_DEFINE([HAVE_LUA],[1],[lua support available])
-            AC_DEFINE([HAVE_LUAJIT],[1],[libluajit available])
-            enable_lua="yes, through luajit"
-            enable_luajit="yes"
-        else
-            echo
-                echo "   ERROR!  libluajit headers not found, go get them"
-                echo "   from http://luajit.org/index.html or your distribution:"
-                echo
-                echo "   Ubuntu: apt-get install libluajit-5.1-dev"
-                echo
-                echo "   If you installed software in a non-standard prefix"
-                echo "   consider adjusting the PKG_CONFIG_PATH environment variable"
-                echo "   or use --with-libluajit-includes and --with-libluajit-libraries"
-                echo "   configure option."
-                echo
-                exit 1
-        fi
-    fi
-
-    AM_CONDITIONAL([HAVE_LUA], [test "x$enable_lua" != "xno"])
-
-    # If Lua is enabled, test the integer size.
-    if test "x$enable_lua" = "xyes" -a "$cross_compiling" != "yes"; then
-        TMPLIBS="$LIBS"
-        LIBS=""
-
-        AC_MSG_CHECKING([size of lua integer])
-        AC_RUN_IFELSE([AC_LANG_PROGRAM([[#include <lua.h>]],
-            [[
-            if (sizeof(lua_Integer) == 8) {
-                return 1;
-            }
-            return 0;
-            ]])],
-            [
-                AC_MSG_RESULT([4])
-            ],
-            [
-                AC_MSG_RESULT([8])
-                AC_SUBST([LUA_INT8], ["lua_int8"])
-            ])
-        LIBS="$TMPLIBS"
     fi
 
   # libmaxminddb
@@ -2358,7 +2174,7 @@ fi
     fi
     RUST_SURICATA_LIB="${RUST_SURICATA_LIBDIR}/${RUST_SURICATA_LIBNAME}"
 
-    CFLAGS="${CFLAGS} -I\${srcdir}/../rust/gen -I\${srcdir}/../rust/dist"
+    CFLAGS="${CFLAGS} -I\${srcdir}/../rust/gen -I\${srcdir}/../rust/dist -I../rust/gen"
     AC_SUBST(RUST_SURICATA_LIB)
     AC_SUBST(RUST_LDADD)
     if test "x$CARGO_HOME" = "x"; then
@@ -2457,6 +2273,20 @@ fi
         RUST_FEATURES="strict"
     ])
     AC_SUBST(RUST_FEATURES)
+
+    AC_ARG_ENABLE(warnings,
+           AS_HELP_STRING([--enable-warnings], [Enable supported C compiler warnings]),[enable_warnings=$enableval],[enable_warnings=no])
+    AS_IF([test "x$enable_warnings" = "xyes"], [
+        # check if our compiler supports -Wunused-macros
+        AC_MSG_CHECKING(for -Wunused-macros support)
+        OCFLAGS=$CFLAGS
+        CFLAGS="$CFLAGS -Wunused-macros"
+        AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[]],
+                    [[]])],
+                AC_MSG_RESULT([yes]),
+                [AC_MSG_RESULT([no])
+                CFLAGS="$OCFLAGS"])
+    ])
 
     AC_CHECK_LIB(fuzzpcap, FPC_IsFuzzPacketCapture, HAS_FUZZPCAP="yes")
     AM_CONDITIONAL([HAS_FUZZPCAP], [test "x$HAS_FUZZPCAP" = "xyes"])
@@ -2641,7 +2471,7 @@ AC_SUBST(enable_non_bundled_htp)
 
 AM_CONDITIONAL([BUILD_SHARED_LIBRARY], [test "x$enable_shared" = "xyes"] && [test "x$can_build_shared_library" = "xyes"])
 
-AC_CONFIG_FILES(Makefile src/Makefile rust/Makefile rust/Cargo.lock rust/Cargo.toml rust/derive/Cargo.toml rust/.cargo/config)
+AC_CONFIG_FILES(Makefile src/Makefile rust/Makefile rust/Cargo.lock rust/Cargo.toml rust/derive/Cargo.toml rust/.cargo/config.toml)
 AC_CONFIG_FILES(qa/Makefile qa/coccinelle/Makefile)
 AC_CONFIG_FILES(rules/Makefile doc/Makefile doc/userguide/Makefile)
 AC_CONFIG_FILES(contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile)
@@ -2678,8 +2508,6 @@ SURICATA_BUILD_CONF="Suricata Configuration:
   hiredis support:                         ${enable_hiredis}
   hiredis async with libevent:             ${enable_hiredis_async}
   PCRE jit:                                ${pcre2_jit_available}
-  LUA support:                             ${enable_lua}
-  libluajit:                               ${enable_luajit}
   GeoIP2 support:                          ${enable_geoip}
   JA3 support:                             ${enable_ja3}
   JA4 support:                             ${enable_ja4}

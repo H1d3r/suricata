@@ -79,8 +79,6 @@ void TmqhFlowRegister(void)
     } else {
         tmqh_table[TMQH_FLOW].OutHandler = TmqhOutputFlowHash;
     }
-
-    return;
 }
 
 void TmqhFlowPrintAutofpHandler(void)
@@ -217,8 +215,6 @@ void TmqhOutputFlowFreeCtx(void *ctx)
               fctx->size);
     SCFree(fctx->queues);
     SCFree(fctx);
-
-    return;
 }
 
 void TmqhOutputFlowHash(ThreadVars *tv, Packet *p)
@@ -241,8 +237,6 @@ void TmqhOutputFlowHash(ThreadVars *tv, Packet *p)
     PacketEnqueue(q, p);
     SCCondSignal(&q->cond_q);
     SCMutexUnlock(&q->mutex_q);
-
-    return;
 }
 
 /**
@@ -271,8 +265,6 @@ void TmqhOutputFlowIPPair(ThreadVars *tv, Packet *p)
     PacketEnqueue(q, p);
     SCCondSignal(&q->cond_q);
     SCMutexUnlock(&q->mutex_q);
-
-    return;
 }
 
 static void TmqhOutputFlowFTPHash(ThreadVars *tv, Packet *p)
@@ -282,8 +274,8 @@ static void TmqhOutputFlowFTPHash(ThreadVars *tv, Packet *p)
 
     if (p->flags & PKT_WANTS_FLOW) {
         uint32_t hash = p->flow_hash;
-        if (p->tcph != NULL && ((p->sp >= 1024 && p->dp >= 1024) || p->dp == 21 || p->sp == 21 ||
-                                       p->dp == 20 || p->sp == 20)) {
+        if (PacketIsTCP(p) && ((p->sp >= 1024 && p->dp >= 1024) || p->dp == 21 || p->sp == 21 ||
+                                      p->dp == 20 || p->sp == 20)) {
             hash = FlowGetIpPairProtoHash(p);
         }
         qid = hash % ctx->size;
@@ -299,8 +291,6 @@ static void TmqhOutputFlowFTPHash(ThreadVars *tv, Packet *p)
     PacketEnqueue(q, p);
     SCCondSignal(&q->cond_q);
     SCMutexUnlock(&q->mutex_q);
-
-    return;
 }
 
 #ifdef UNITTESTS
@@ -413,6 +403,4 @@ void TmqhFlowRegisterTests(void)
     UtRegisterTest("TmqhOutputFlowSetupCtxTest03",
                    TmqhOutputFlowSetupCtxTest03);
 #endif
-
-    return;
 }

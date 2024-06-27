@@ -53,9 +53,6 @@
 
 SC_ATOMIC_EXTERN(unsigned int, cert_id);
 
-#define MODULE_NAME "LogTlsLog"
-#define DEFAULT_LOG_FILENAME "tls.json"
-
 #define LOG_TLS_DEFAULT                 0
 #define LOG_TLS_EXTENDED                (1 << 0)
 #define LOG_TLS_CUSTOM                  (1 << 1)
@@ -78,6 +75,7 @@ SC_ATOMIC_EXTERN(unsigned int, cert_id);
 #define LOG_TLS_FIELD_CLIENT_CERT       (1 << 14)
 #define LOG_TLS_FIELD_CLIENT_CHAIN      (1 << 15)
 #define LOG_TLS_FIELD_JA4               (1 << 16)
+#define LOG_TLS_FIELD_SUBJECTALTNAME    (1 << 17)
 
 typedef struct {
     const char *name;
@@ -92,7 +90,8 @@ TlsFields tls_fields[] = { { "version", LOG_TLS_FIELD_VERSION },
     { "chain", LOG_TLS_FIELD_CHAIN }, { "session_resumed", LOG_TLS_FIELD_SESSION_RESUMED },
     { "ja3", LOG_TLS_FIELD_JA3 }, { "ja3s", LOG_TLS_FIELD_JA3S },
     { "client", LOG_TLS_FIELD_CLIENT }, { "client_certificate", LOG_TLS_FIELD_CLIENT_CERT },
-    { "client_chain", LOG_TLS_FIELD_CLIENT_CHAIN }, { "ja4", LOG_TLS_FIELD_JA4 }, { NULL, -1 } };
+    { "client_chain", LOG_TLS_FIELD_CLIENT_CHAIN }, { "ja4", LOG_TLS_FIELD_JA4 },
+    { "subjectaltname", LOG_TLS_FIELD_SUBJECTALTNAME }, { NULL, -1 } };
 
 typedef struct OutputTlsCtx_ {
     uint32_t flags;  /** Store mode */
@@ -119,6 +118,17 @@ static void JsonTlsLogIssuer(JsonBuilder *js, SSLState *ssl_state)
     if (ssl_state->server_connp.cert0_issuerdn) {
         jb_set_string(js, "issuerdn",
                             ssl_state->server_connp.cert0_issuerdn);
+    }
+}
+
+static void JsonTlsLogSAN(JsonBuilder *js, SSLState *ssl_state)
+{
+    if (ssl_state->server_connp.cert0_sans_len > 0) {
+        jb_open_array(js, "subjectaltname");
+        for (uint16_t i = 0; i < ssl_state->server_connp.cert0_sans_len; i++) {
+            jb_append_string(js, ssl_state->server_connp.cert0_sans[i]);
+        }
+        jb_close(js);
     }
 }
 
@@ -253,6 +263,24 @@ static void JsonTlsLogJa3S(JsonBuilder *js, SSLState *ssl_state)
     }
 }
 
+static void JsonTlsLogAlpns(JsonBuilder *js, SSLStateConnp *connp, const char *object)
+{
+    if (TAILQ_EMPTY(&connp->alpns)) {
+        return;
+    }
+
+    SSLAlpns *a = TAILQ_FIRST(&connp->alpns);
+    if (a == NULL) {
+        return;
+    }
+
+    jb_open_array(js, object);
+    TAILQ_FOREACH (a, &connp->alpns, next) {
+        jb_append_string_from_bytes(js, a->alpn, a->size);
+    }
+    jb_close(js);
+}
+
 static void JsonTlsLogCertificate(JsonBuilder *js, SSLStateConnp *connp)
 {
     if (TAILQ_EMPTY(&connp->certs)) {
@@ -334,6 +362,9 @@ void JsonTlsLogJSONBasic(JsonBuilder *js, SSLState *ssl_state)
     /* tls issuerdn */
     JsonTlsLogIssuer(js, ssl_state);
 
+    /* tls subjectaltname */
+    JsonTlsLogSAN(js, ssl_state);
+
     /* tls session resumption */
     JsonTlsLogSessionResumed(js, ssl_state);
 }
@@ -347,6 +378,10 @@ static void JsonTlsLogJSONCustom(OutputTlsCtx *tls_ctx, JsonBuilder *js,
 
     /* tls issuerdn */
     if (tls_ctx->fields & LOG_TLS_FIELD_ISSUER)
+        JsonTlsLogIssuer(js, ssl_state);
+
+    /* tls subjectaltname */
+    if (tls_ctx->fields & LOG_TLS_FIELD_SUBJECTALTNAME)
         JsonTlsLogIssuer(js, ssl_state);
 
     /* tls session resumption */
@@ -439,6 +474,9 @@ static bool JsonTlsLogJSONExtendedAux(void *vtx, JsonBuilder *tjs)
 
     /* tls ja4 */
     JsonTlsLogSCJA4(tjs, state);
+
+    JsonTlsLogAlpns(tjs, &state->client_connp, "client_alpns");
+    JsonTlsLogAlpns(tjs, &state->server_connp, "server_alpns");
 
     if (HasClientCert(&state->client_connp)) {
         jb_open_object(tjs, "client");
